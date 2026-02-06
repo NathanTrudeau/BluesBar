@@ -1,6 +1,9 @@
-﻿using System;
+﻿using BluesBar.Rooms;
+using BluesBar.Systems;
+using BluesShared;
+using System;
 using System.Windows;
-using BluesBar.Rooms;
+using System.Windows.Input;
 
 namespace BluesBar
 {
@@ -9,6 +12,7 @@ namespace BluesBar
     /// </summary>
     public partial class MainWindow : Window
     {
+        private ProfileSync _profileSync = null!;
         private AimRoomWindow? _aim;
         private GamblooWindow? _gambloo;
         private BackpackWindow? _backpack;
@@ -18,12 +22,30 @@ namespace BluesBar
         {
             InitializeComponent();
             Systems.ProfileManager.Instance.LoadOrCreate();
+            InitProfileCoinSync();
             RefreshProfileHud();
+
+
+            this.Closing += MainWindow_Closing;
         }
 
         private void OpenAim_Click(object sender, RoutedEventArgs e)
         {
-            _aim = OpenOrActivate(_aim, () => new AimRoomWindow());
+            //------------------------------------------------------------
+            //       BluesAimTrain        BETA V3.0         2/5/26
+            //------------------------------------------------------------
+            try
+            {
+                AimTrainerLauncher.Launch();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Failed to launch Aim Trainer:\n\n" + ex.Message,
+                    "Launch Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            } 
         }
 
         private void OpenGambloo_Click(object sender, RoutedEventArgs e)
@@ -103,14 +125,63 @@ namespace BluesBar
             SavingsText.Text = $"{p.Coins:N0} Coins";
         }
 
+        private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+        {
+            Systems.ProfileManager.Instance.Save();
+        }
+
+        private void InitProfileCoinSync()
+        {
+            _profileSync = ProfileSync.CreateDefault();
+
+            // Ensure profile exists and hydrate your in-app ProfileManager
+            var profile = _profileSync.LoadOrCreateLocked();
+            BluesBar.Systems.ProfileManager.Instance.LoadOrCreate(); // if you already do this elsewhere, keep only one call
+
+            // Set displayed coins immediately
+            BluesBar.Systems.ProfileManager.Instance.Current.Coins = profile.Coins;
+            RefreshProfileHud();
+
+            // Live updates from AimTrain or BluesBar writes
+            _profileSync.CoinsChanged += coins =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    BluesBar.Systems.ProfileManager.Instance.Current.Coins = coins;
+                    RefreshProfileHud();
+                });
+            };
+
+            _profileSync.StartWatching();
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            _profileSync?.Dispose();
+            base.OnClosed(e);
+        }
+
+        public void AwardCoins(int amount)
+        {
+            if (amount <= 0) return;
+
+            // Writes into BluesBar's profile.json under the shared lock.
+            _profileSync.EarnLocked(amount, reason: "AimTrain");
+        }
+
+
         //DEBUGGING ONLY -- remove before shipping
         private void DebugEarn_Click(object sender, RoutedEventArgs e)
         {
-            Systems.ProfileManager.Instance.Earn(5000, "Debug");
+            Systems.ProfileManager.Instance.Earn(100000, "Debug Earn");
             RefreshProfileHud();
         }
         //DEBUGGING ONLY -- remove before shipping
+
+        
     }
+
+
 
 
 }

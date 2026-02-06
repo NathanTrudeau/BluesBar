@@ -122,7 +122,7 @@
             <!-- Window buttons -->
             <Button Width="32" Height="24" DockPanel.Dock="Right" Content="✕" ToolTip="Close" Foreground="RoyalBlue" Background="White" Click="CloseButton_Click"/>
             <Button Width="32" Height="24" DockPanel.Dock="Right" Content="⬜" ToolTip="Maximize / Restore" Foreground="RoyalBlue" Background="White" Click="MaxRestoreButton_Click"/>
-            <Button Width="32" Height="24" DockPanel.Dock="Right" Content="—" ToolTip="Minimize" Foreground="RoyalBlue" Background="White" Click="MinimizeButton_Click"/>
+            <Button Width="33" Height="24" DockPanel.Dock="Right" Content="—" ToolTip="Minimize" Foreground="RoyalBlue" Background="White" Click="MinimizeButton_Click"/>
 
             <DockPanel.Resources>
                 <Style TargetType="Button">
@@ -209,15 +209,8 @@
                        Opacity="0.75"
                        HorizontalAlignment="Right"/>
                         <TextBlock x:Name="SavingsText"
-                       Text="12,384 Coins"
-                       Foreground="White"
-                       FontSize="18"
-                       FontFamily="Segoe UI Black"
-                       HorizontalAlignment="Right">
-                            <TextBlock.Effect>
-                                <DropShadowEffect Color="Black" BlurRadius="4" ShadowDepth="0" Opacity="0.6"/>
-                            </TextBlock.Effect>
-                        </TextBlock>
+                           Foreground="#FFD700"
+                           FontWeight="Bold"/>
 
                         <!-- Optional tiny hint line (leave blank now, use slogan later) -->
                         <TextBlock x:Name="HeaderHintText"
@@ -228,6 +221,13 @@
                        HorizontalAlignment="Right"
                        Margin="0,2,0,0"/>
                     </StackPanel>
+                    <Button Content="+10K"
+                        Width="28"
+                        Height="22"
+                        FontSize="10"
+                        Margin="149,7,0,0"
+                        Style="{StaticResource FancyButton}"
+                        Click="DebugEarn_Click" VerticalAlignment="Top" HorizontalAlignment="Left"/>
                 </Grid>
             </Border>
 

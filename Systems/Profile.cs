@@ -6,7 +6,7 @@ namespace BluesBar.Systems
     public class Profile
     {
         // Identity (optional for now)
-        public string PlayerName { get; set; } = "Blues";
+        public string PlayerName { get; set; } = "b1uepack";
 
         // Wallet
         public long Coins { get; set; } = 0;                 // spendable balance ("savings")

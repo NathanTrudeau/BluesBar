@@ -166,15 +166,23 @@ namespace BluesBar.Systems
             Current.UpdatedUtc = DateTime.UtcNow;
 
             var tmp = ProfilePath + ".tmp";
+            var backup = ProfilePath + ".bak";
+
             var json = JsonSerializer.Serialize(Current, _jsonOptions);
 
+            // Write temp file first
             File.WriteAllText(tmp, json);
 
-            // Atomic replace (Windows). Falls back if first time.
+            // Backup existing profile if it exists
             if (File.Exists(ProfilePath))
+            {
+                File.Copy(ProfilePath, backup, true);
                 File.Replace(tmp, ProfilePath, null);
+            }
             else
+            {
                 File.Move(tmp, ProfilePath);
+            }
         }
     }
 }

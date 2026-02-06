@@ -1,0 +1,402 @@
+﻿<UserControl x:Class="BluesBar.Gambloo.Scenes.RouletteScene"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="Transparent">
+
+    <UserControl.Resources>
+        <SolidColorBrush x:Key="Bg0" Color="#101010"/>
+        <SolidColorBrush x:Key="Panel" Color="#222222"/>
+        <SolidColorBrush x:Key="Panel2" Color="#102A5C"/>
+        <SolidColorBrush x:Key="Accent" Color="#FF4169E1"/>
+        <SolidColorBrush x:Key="Accent2" Color="#6FC3E2"/>
+        <SolidColorBrush x:Key="TextDim" Color="#AAAAAA"/>
+    </UserControl.Resources>
+
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <!-- TOP: controls + wheel + mini-history -->
+            <RowDefinition Height="2*"/>
+            <!-- BOTTOM: table -->
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Grid.ColumnDefinitions>
+            <!-- left controls -->
+            <ColumnDefinition Width="250"/>
+            <!-- center wheel (+ mini-history) -->
+            <ColumnDefinition Width="*"/>
+            <!-- right bet slip (bigger) -->
+            <ColumnDefinition Width="320"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- LEFT: Wallet + Chip + Spin -->
+        <Border Grid.Row="0" Grid.Column="0"
+                Background="{StaticResource Panel2}"
+                BorderBrush="{StaticResource Accent}"
+                BorderThickness="3"
+                CornerRadius="14"
+                Padding="12"
+                Margin="0,0,10,10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel>
+                    <TextBlock Text="Roulette" Foreground="White" FontSize="24" FontFamily="Segoe UI Black"/>
+                    <TextBlock x:Name="WalletText" Text="Savings: 0 Coins" Foreground="{StaticResource TextDim}" Margin="0,6,0,0"/>
+                    <TextBlock x:Name="NetWorthText" Text="Net Worth: $0" Foreground="{StaticResource TextDim}" Opacity="0.7"/>
+                </StackPanel>
+
+                <!-- chip -->
+                <Border Grid.Row="1"
+                        Background="#222"
+                        BorderBrush="{StaticResource Accent}"
+                        BorderThickness="2"
+                        CornerRadius="12"
+                        Padding="10"
+                        Margin="0,12,0,0">
+                    <StackPanel>
+                        <TextBlock Text="Chip" Foreground="White" FontFamily="Segoe UI Black" FontSize="13"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBox x:Name="ChipTextBox"
+                                     Text="100"
+                                     Width="110" Height="28"
+                                     Foreground="White"
+                                     Background="#111"
+                                     BorderBrush="{StaticResource Accent}"
+                                     BorderThickness="2"
+                                     Padding="8,3"
+                                     VerticalContentAlignment="Center"/>
+                            <Button Content="+1K" Width="44" Margin="8,0,0,0" Click="ChipPlus1k_Click"/>
+                            <Button Content="+10K" Width="54" Margin="6,0,0,0" Click="ChipPlus10k_Click"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Click the felt to bet lines (split/corner/street/six-line)."
+                                   Foreground="{StaticResource TextDim}"
+                                   FontSize="11"
+                                   Opacity="0.85"
+                                   Margin="0,8,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- spin + outcome -->
+                <Border Grid.Row="3"
+                        Background="#1A1A1A"
+                        BorderBrush="#555"
+                        BorderThickness="2"
+                        CornerRadius="12"
+                        Padding="10"
+                        Margin="0,12,0,0">
+                    <StackPanel>
+                        <Button x:Name="SpinButton"
+                                Content="SPIN"
+                                Height="48"
+                                FontFamily="Segoe UI Black"
+                                FontSize="16"
+                                Background="#4682B4"
+                                BorderBrush="#87CEFA"
+                                BorderThickness="2"
+                                Click="Spin_Click"/>
+
+                        <TextBlock x:Name="OutcomeText"
+                                   Text=""
+                                   Foreground="White"
+                                   Opacity="0.9"
+                                   Margin="0,10,0,0"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- CENTER TOP: Wheel + Result + Mini History strip -->
+        <Border Grid.Row="0" Grid.Column="1"
+                Background="{StaticResource Panel}"
+                BorderBrush="{StaticResource Accent}"
+                BorderThickness="3"
+                CornerRadius="14"
+                Padding="10"
+                Margin="0,0,10,10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="180"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- wheel canvas -->
+                    <Grid Grid.Column="0">
+                        <!-- pointer -->
+                        <Polygon Points="0,0 18,0 9,18"
+                                 Fill="{StaticResource Accent2}"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Top"
+                                 Margin="0,6,0,0"/>
+
+                        <Canvas x:Name="WheelCanvas"
+                                Width="190"
+                                Height="190"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                            <Canvas.RenderTransform>
+                                <RotateTransform x:Name="WheelRotate" Angle="0" CenterX="95" CenterY="95"/>
+                            </Canvas.RenderTransform>
+                        </Canvas>
+
+                        <!-- landing ring -->
+                        <Ellipse x:Name="WheelLandingRing"
+                                 Width="204"
+                                 Height="204"
+                                 Stroke="{StaticResource Accent2}"
+                                 StrokeThickness="4"
+                                 Opacity="0.0"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center"/>
+                    </Grid>
+
+                    <!-- result -->
+                    <Grid Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="8"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="8"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="8"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0"
+                                   Text="RESULT"
+                                   Foreground="{StaticResource TextDim}"
+                                   FontSize="12"
+                                   FontFamily="Segoe UI Black"
+                                   HorizontalAlignment="Center"/>
+
+                        <Border Grid.Row="2"
+                                x:Name="ResultChip"
+                                Background="#333"
+                                CornerRadius="12"
+                                Padding="10"
+                                HorizontalAlignment="Center">
+                            <TextBlock x:Name="ResultText"
+                                       Text="--"
+                                       Foreground="White"
+                                       FontFamily="Consolas"
+                                       FontSize="24"
+                                       FontWeight="Bold"/>
+                        </Border>
+
+                        <Border Grid.Row="4"
+                                x:Name="ResultColorChip"
+                                Background="#333"
+                                CornerRadius="12"
+                                Padding="8"
+                                HorizontalAlignment="Center">
+                            <TextBlock x:Name="ResultColorText"
+                                       Text="-"
+                                       Foreground="White"
+                                       FontFamily="Consolas"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"/>
+                        </Border>
+
+                        <TextBlock Grid.Row="6"
+                                   x:Name="LandingText"
+                                   Text=""
+                                   Foreground="{StaticResource Accent2}"
+                                   FontFamily="Segoe UI Black"
+                                   FontSize="12"
+                                   HorizontalAlignment="Center"
+                                   Opacity="0.0"/>
+                    </Grid>
+                </Grid>
+
+                <!-- MINI HISTORY STRIP -->
+                <Border Grid.Row="1"
+                        Background="#111"
+                        BorderBrush="#444"
+                        BorderThickness="2"
+                        CornerRadius="12"
+                        Padding="10"
+                        Margin="0,10,0,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="Last 10"
+                                   Foreground="{StaticResource TextDim}"
+                                   FontFamily="Segoe UI Black"
+                                   FontSize="12"
+                                   VerticalAlignment="Center"/>
+
+                        <!-- Replace ListBox later if you want, but keeps your existing HistoryList working -->
+                        <ListBox x:Name="HistoryList"
+                                 Grid.Column="1"
+                                 Margin="10,0,10,0"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                                 ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                 Foreground="White"
+                                 FontFamily="Consolas"
+                                 FontSize="12">
+                            <ListBox.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                            </ListBox.ItemsPanel>
+
+                            <!-- Make it look like color chips -->
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="0"/>
+                                    <Setter Property="Margin" Value="0,0,8,0"/>
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+                                    <Setter Property="BorderThickness" Value="0"/>
+                                    <Setter Property="Background" Value="Transparent"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="B"
+                                                        Background="#222"
+                                                        BorderBrush="#555"
+                                                        BorderThickness="2"
+                                                        CornerRadius="10"
+                                                        Padding="8,6"
+                                                        Opacity="0.9">
+                                                    <ContentPresenter/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <!-- Most recent item should be Selected from code -->
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="B" Property="BorderBrush" Value="{StaticResource Accent2}"/>
+                                                        <Setter TargetName="B" Property="BorderThickness" Value="3"/>
+                                                        <Setter TargetName="B" Property="Opacity" Value="1.0"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                        </ListBox>
+
+                        <Button Grid.Column="2"
+                                Content="Clear"
+                                Width="60"
+                                Click="ClearHistory_Click"/>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- RIGHT TOP: BET SLIP (moved here, bigger) -->
+        <Border Grid.Row="0" Grid.Column="2"
+                Background="{StaticResource Panel2}"
+                BorderBrush="{StaticResource Accent}"
+                BorderThickness="3"
+                CornerRadius="14"
+                Padding="12"
+                Margin="0,0,0,10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <DockPanel>
+                    <TextBlock Text="Bet Slip"
+                               Foreground="White"
+                               FontFamily="Segoe UI Black"
+                               FontSize="14"
+                               DockPanel.Dock="Left"/>
+                    <TextBlock x:Name="SlipCountText"
+                               Text="0 bets"
+                               Foreground="{StaticResource TextDim}"
+                               DockPanel.Dock="Right"
+                               VerticalAlignment="Center"/>
+                </DockPanel>
+
+                <ListBox x:Name="SlipListBox"
+                         Grid.Row="1"
+                         Margin="0,10,0,10"
+                         Background="#111"
+                         BorderBrush="{StaticResource Accent}"
+                         BorderThickness="2"
+                         Foreground="White"
+                         FontFamily="Consolas"
+                         FontSize="12"/>
+
+                <StackPanel Grid.Row="2">
+                    <TextBlock x:Name="TotalStakeText"
+                               Text="Total Stake: 0"
+                               Foreground="White"
+                               FontFamily="Segoe UI Black"
+                               FontSize="14"/>
+                    <TextBlock x:Name="PotentialText"
+                               Text="Potential: -"
+                               Foreground="{StaticResource TextDim}"
+                               FontSize="11"
+                               Opacity="0.75"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                        <Button Content="Clear Slip"
+                                Width="120"
+                                Click="ClearSlip_Click"/>
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- BOTTOM: Table spans entire width -->
+        <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
+                Background="{StaticResource Panel}"
+                BorderBrush="{StaticResource Accent}"
+                BorderThickness="3"
+                CornerRadius="14"
+                Padding="10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <DockPanel>
+                    <TextBlock Text="TABLE (click felt to bet)"
+                               Foreground="White"
+                               FontFamily="Segoe UI Black"
+                               FontSize="13"
+                               DockPanel.Dock="Left"/>
+
+                    <TextBlock x:Name="HoverBetText"
+                               DockPanel.Dock="Right"
+                               Text=""
+                               Foreground="{StaticResource Accent2}"
+                               FontFamily="Consolas"
+                               FontSize="12"
+                               Opacity="0.9"/>
+                </DockPanel>
+
+                <Grid Grid.Row="1" Margin="0,10,0,0">
+                    <Canvas x:Name="TableCanvas" Background="#0F2A18"/>
+                </Grid>
+            </Grid>
+        </Border>
+
+    </Grid>
+</UserControl>
+
