@@ -119,6 +119,13 @@
                 </TextBlock.Effect>
             </TextBlock>
 
+            <Button Content="+100K"
+                Width="39"
+                Height="28"
+                FontSize="10"
+                Margin="118,2,0,0"
+                Style="{StaticResource FancyButton}"
+                Click="DebugEarn_Click" BorderThickness="4,4,4,4" Background="#FF00F3FF" BorderBrush="#FF001FFF" Opacity="0.9" FontWeight="UltraBlack"/>
             <!-- Window buttons -->
             <Button Width="32" Height="24" DockPanel.Dock="Right" Content="✕" ToolTip="Close" Foreground="RoyalBlue" Background="White" Click="CloseButton_Click"/>
             <Button Width="32" Height="24" DockPanel.Dock="Right" Content="⬜" ToolTip="Maximize / Restore" Foreground="RoyalBlue" Background="White" Click="MaxRestoreButton_Click"/>
@@ -221,13 +228,7 @@
                        HorizontalAlignment="Right"
                        Margin="0,2,0,0"/>
                     </StackPanel>
-                    <Button Content="+10K"
-                        Width="28"
-                        Height="22"
-                        FontSize="10"
-                        Margin="149,7,0,0"
-                        Style="{StaticResource FancyButton}"
-                        Click="DebugEarn_Click" VerticalAlignment="Top" HorizontalAlignment="Left"/>
+
                 </Grid>
             </Border>
 

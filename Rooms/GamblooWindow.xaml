@@ -37,9 +37,13 @@
             <!-- Nav buttons (same header bar) -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0" DockPanel.Dock="Left">
                 <Button Content="Blackjack" Margin="0,0,8,0" Click="NavBlackjack_Click"/>
+                <Button Content="RideTheBus" Margin="0,0,8,0" Click="NavRideTheBus_Click"/>
                 <Button Content="Roulette" Margin="0,0,8,0" Click="NavRoulette_Click"/>
                 <Button Content="Slots" Margin="0,0,8,0" Click="NavSlots_Click"/>
                 <Button Content="RocketCrash" Margin="0,0,8,0" Click="NavRocketCrash_Click"/>
+                <Button Content="Blinko" Margin="0,0,8,0" Click="NavBlinko_Click"/>
+                <Button Content="CoinFlip" Margin="0,0,8,0" Click="NavCoinFlip_Click"/>
+                <Button Content="RPS" Margin="0,0,8,0" Click="NavRockPaperScissors_Click"/>
             </StackPanel>
 
             <!-- Busy / status -->

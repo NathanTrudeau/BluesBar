@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using System.Windows.Shapes;
 using BluesBar.Gambloo;
 using BluesBar.Systems;
@@ -35,34 +36,43 @@ namespace BluesBar.Gambloo.Scenes
             1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36
         };
 
-        private readonly List<RouletteBet> _slip = new();
-        private readonly List<SpinResult> _history = new();
+        // -------------------------
+        // NEW: placed-chips betting (no slip list)
+        // -------------------------
+        private sealed class BetRegion
+        {
+            public string Key = "";
+            public RouletteBet Prototype = new RouletteBet();
+            public Rect HitRect;
+            public Point Anchor;
+            public string HoverLabel = "";
+        }
+
+        private readonly List<BetRegion> _regions = new();
+        private readonly Dictionary<string, long> _placed = new();                // key -> amount
+        private readonly Dictionary<string, Border> _chipVisuals = new();         // key -> chip UI
+        private readonly Stack<(string key, long delta)> _undo = new();           // undo stack
+        private Dictionary<string, long> _lastRoundPlaced = new();                // for Rebet
+
+        // History (tiles UI)
+        private readonly List<int> _history = new();
+        const int MaxHistory = 60;
 
         // Wheel animation state
         private double _wheelAngle = 0; // degrees
+        private readonly Dictionary<int, Shape> _wheelSegmentByNumber = new();
 
-        // Table geometry (European layout)
-        // 1..36 in 12 rows x 3 cols:
-        // bottom row: 1,2,3; top row: 34,35,36 (standard felt)
-        private const double FeltPad = 10;
-
-        // Smaller visuals
-        private const double CellW = 54;
-        private const double CellH = 38;
-        private const double ZeroW = 54;
-        private const double ZeroH = 38;
-
-        // Bigger invisible click padding
-        private const double HitPad = 8;
-
-        // Derived
-        private Rect _rectGrid;   // main 12x3 area
-        private Rect _rectZero;   // 0 box
+        // -------------------------
+        // Table geometry (WIDE layout)
+        // 3 rows x 12 cols:
+        // row0: 1,4,7,...,34
+        // row1: 2,5,8,...,35
+        // row2: 3,6,9,...,36
+        // -------------------------
+        private Rect _rectGrid;
+        private Rect _rectZero;
         private Rect _rectDozen1, _rectDozen2, _rectDozen3;
         private Rect _rectLow, _rectEven, _rectRed, _rectBlack, _rectOdd, _rectHigh;
-        private Rect _rectCol1, _rectCol2, _rectCol3; // right-side columns bets
-
-        private readonly Dictionary<int, Shape> _wheelSegmentByNumber = new();
 
         public RouletteScene()
         {
@@ -70,19 +80,48 @@ namespace BluesBar.Gambloo.Scenes
 
             Loaded += (_, __) =>
             {
+                WireEventsOnce();
                 BuildWheel();
                 BuildTable();
                 RefreshWalletHud();
-                RefreshSlipUi();
-                RefreshHistoryUi();
+                RefreshStakeHud();
+                SeedFakeHistory(MaxHistory);
+                RefreshHistoryTiles();
+                ResizeHistoryGrid();
+                ClearOutcome();
             };
+        }
 
-            TableCanvas.SizeChanged += (_, __) => BuildTable();
+        private bool _wired = false;
+        private void WireEventsOnce()
+        {
+            if (_wired) return;
+            _wired = true;
+
+            if (TableCanvas != null)
+            {
+                TableCanvas.SizeChanged += (_, __) => BuildTable();
+                TableCanvas.MouseMove += TableCanvas_MouseMove;
+                TableCanvas.MouseLeave += (_, __) => { if (HoverBetText != null) HoverBetText.Text = ""; };
+            }
+
+            if (WheelCanvas != null)
+                WheelCanvas.SizeChanged += (_, __) => BuildWheel();
+
+            // NEW: history grid columns adapt to available width
+            if (HistoryPanel != null)
+                HistoryPanel.SizeChanged += (_, __) => ResizeHistoryGrid();
+            else if (HistoryTiles != null)
+                HistoryTiles.SizeChanged += (_, __) => ResizeHistoryGrid();
+
+            // also do one pass once layout exists
+            Loaded += (_, __) => ResizeHistoryGrid();
         }
 
         public void OnShown()
         {
             RefreshWalletHud();
+            RefreshStakeHud();
         }
 
         public void OnHidden() { }
@@ -93,8 +132,8 @@ namespace BluesBar.Gambloo.Scenes
         private void RefreshWalletHud()
         {
             var p = ProfileManager.Instance.Current;
-            WalletText.Text = $"Savings: {p.Coins:N0} Coins";
-            NetWorthText.Text = $"Net Worth: ${p.NetWorth:N0}";
+            if (WalletText != null) WalletText.Text = $"Savings: {p.Coins:N0} Coins";
+            if (NetWorthText != null) NetWorthText.Text = $"Net Worth: ${p.NetWorth:N0}";
         }
 
         // -------------------------
@@ -115,53 +154,50 @@ namespace BluesBar.Gambloo.Scenes
         }
 
         // -------------------------
-        // Slip / History UI
-        // -------------------------
-        private void RefreshSlipUi()
-        {
-            SlipListBox.Items.Clear();
-            foreach (var b in _slip)
-                SlipListBox.Items.Add(b.ToDisplayString());
-
-            SlipCountText.Text = $"{_slip.Count} bets";
-
-            long stake = _slip.Sum(x => x.Amount);
-            TotalStakeText.Text = $"Total Stake: {stake:N0}";
-
-            long maxPayout = _slip.Count == 0 ? 0 : _slip.Max(x => x.GetReturnIfWin());
-            PotentialText.Text = _slip.Count == 0 ? "Potential: -" : $"Potential: up to {maxPayout:N0} return (one bet hit)";
-        }
-
-        private void PushHistory(int number)
-        {
-            _history.Insert(0, new SpinResult(number, ColorName(number)));
-            if (_history.Count > 10) _history.RemoveAt(_history.Count - 1);
-            RefreshHistoryUi();
-        }
-
-        private void RefreshHistoryUi()
-        {
-            HistoryList.Items.Clear();
-            foreach (var h in _history)
-                HistoryList.Items.Add(h.ToDisplayString());
-        }
-
-        // -------------------------
         // Chip helpers
         // -------------------------
         private bool TryGetChip(out long chip)
         {
             chip = 0;
+            if (ChipTextBox == null) return false;
             return long.TryParse(ChipTextBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out chip);
         }
 
-        private void ChipPlus1k_Click(object sender, RoutedEventArgs e) => AddToChip(1_000);
-        private void ChipPlus10k_Click(object sender, RoutedEventArgs e) => AddToChip(10_000);
-
-        private void AddToChip(long add)
+        // Hooked from XAML: chip puck click (Border Tag="100"/"1000"/"5000" etc)
+        private void ChipPreset_Click(object sender, MouseButtonEventArgs e)
         {
-            if (!TryGetChip(out var cur)) cur = 0;
-            ChipTextBox.Text = (cur + add).ToString(CultureInfo.InvariantCulture);
+            if (IsBusy) return;
+            if (sender is FrameworkElement fe && fe.Tag != null && ChipTextBox != null)
+            {
+                ChipTextBox.Text = fe.Tag.ToString() ?? "100";
+            }
+        }
+
+        // -------------------------
+        // Stake HUD
+        // -------------------------
+        private void RefreshStakeHud()
+        {
+            long stake = _placed.Values.Sum();
+            if (TotalStakeText != null) TotalStakeText.Text = $"Stake: {stake:N0}";
+        }
+
+        private void ClearOutcome()
+        {
+            if (OutcomeText != null)
+            {
+                OutcomeText.Text = "";
+                OutcomeText.Foreground = Brushes.White;
+            }
+        }
+
+        private void SetOutcome(string msg, Brush color)
+        {
+            if (OutcomeText != null)
+            {
+                OutcomeText.Text = msg;
+                OutcomeText.Foreground = color;
+            }
         }
 
         // -------------------------
@@ -169,13 +205,16 @@ namespace BluesBar.Gambloo.Scenes
         // -------------------------
         private void BuildWheel()
         {
-            if (WheelCanvas == null) return;
+            if (WheelCanvas == null || WheelRotate == null) return;
 
             WheelCanvas.Children.Clear();
             _wheelSegmentByNumber.Clear();
 
-            double w = WheelCanvas.Width;
-            double h = WheelCanvas.Height;
+            double w = WheelCanvas.ActualWidth > 1 ? WheelCanvas.ActualWidth : WheelCanvas.Width;
+            double h = WheelCanvas.ActualHeight > 1 ? WheelCanvas.ActualHeight : WheelCanvas.Height;
+
+            if (w < 50 || h < 50) return;
+
             double cx = w / 2.0;
             double cy = h / 2.0;
 
@@ -183,16 +222,18 @@ namespace BluesBar.Gambloo.Scenes
             double innerR = outerR * 0.62;
 
             // Outer ring
-            WheelCanvas.Children.Add(new Ellipse
+            var outer = new Ellipse
             {
                 Width = outerR * 2,
                 Height = outerR * 2,
                 Stroke = Brushes.White,
                 StrokeThickness = 2,
                 Opacity = 0.85
-            }.WithPos(cx - outerR, cy - outerR));
+            };
+            Canvas.SetLeft(outer, cx - outerR);
+            Canvas.SetTop(outer, cy - outerR);
+            WheelCanvas.Children.Add(outer);
 
-            // Segment wedges + labels
             int segCount = WheelOrder.Length;
             double step = 360.0 / segCount;
 
@@ -200,7 +241,6 @@ namespace BluesBar.Gambloo.Scenes
             {
                 int n = WheelOrder[i];
 
-                // Segment center angle: start at -90 (top), go clockwise
                 double a0 = -90 + (i * step);
                 double a1 = a0 + step;
 
@@ -208,10 +248,9 @@ namespace BluesBar.Gambloo.Scenes
                 wedge.Opacity = 0.92;
                 WheelCanvas.Children.Add(wedge);
 
-                // Keep reference for highlight (last one wins if duplicates, but numbers are unique)
                 _wheelSegmentByNumber[n] = wedge;
 
-                // Label
+                // label
                 double mid = (a0 + a1) / 2.0;
                 double rad = (innerR + outerR) / 2.0;
                 var pt = Polar(cx, cy, rad, mid);
@@ -221,22 +260,21 @@ namespace BluesBar.Gambloo.Scenes
                     Text = n.ToString(),
                     Foreground = Brushes.White,
                     FontFamily = new FontFamily("Consolas"),
-                    FontSize = 14,
-                    FontWeight = FontWeights.SemiBold
+                    FontSize = Math.Max(11, outerR * 0.12),
+                    FontWeight = FontWeights.SemiBold,
+                    IsHitTestVisible = false
                 };
 
-                // Center label on point
                 tb.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
                 var sz = tb.DesiredSize;
 
                 Canvas.SetLeft(tb, pt.X - sz.Width / 2);
                 Canvas.SetTop(tb, pt.Y - sz.Height / 2);
-
                 WheelCanvas.Children.Add(tb);
             }
 
             // Inner circle
-            WheelCanvas.Children.Add(new Ellipse
+            var inner = new Ellipse
             {
                 Width = innerR * 2,
                 Height = innerR * 2,
@@ -244,9 +282,13 @@ namespace BluesBar.Gambloo.Scenes
                 Stroke = Brushes.White,
                 StrokeThickness = 2,
                 Opacity = 0.9
-            }.WithPos(cx - innerR, cy - innerR));
+            };
+            Canvas.SetLeft(inner, cx - innerR);
+            Canvas.SetTop(inner, cy - innerR);
+            WheelCanvas.Children.Add(inner);
 
-            // Reset transform angle
+            WheelRotate.CenterX = cx;
+            WheelRotate.CenterY = cy;
             WheelRotate.Angle = _wheelAngle;
         }
 
@@ -267,11 +309,11 @@ namespace BluesBar.Gambloo.Scenes
 
             if (_wheelSegmentByNumber.TryGetValue(n, out var seg))
             {
-                seg.Stroke = new SolidColorBrush(Color.FromRgb(0x6F, 0xC3, 0xE2)); // Accent2-ish
+                seg.Stroke = new SolidColorBrush(Color.FromRgb(0x6F, 0xC3, 0xE2));
                 seg.StrokeThickness = 3;
                 seg.Opacity = 1.0;
 
-                seg.Effect = new System.Windows.Media.Effects.DropShadowEffect
+                seg.Effect = new DropShadowEffect
                 {
                     Color = Color.FromRgb(0x6F, 0xC3, 0xE2),
                     BlurRadius = 18,
@@ -279,8 +321,60 @@ namespace BluesBar.Gambloo.Scenes
                     Opacity = 0.9
                 };
             }
+
+            // optional ring pulse if present in XAML
+            if (WheelLandingRing != null)
+            {
+                WheelLandingRing.Opacity = 0.0;
+                var a = new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(180))
+                {
+                    AutoReverse = true,
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+                };
+                WheelLandingRing.BeginAnimation(UIElement.OpacityProperty, a);
+            }
+
+            if (LandingText != null)
+            {
+                LandingText.Opacity = 1.0;
+                var a = new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(200));
+                LandingText.BeginAnimation(UIElement.OpacityProperty, a);
+            }
         }
 
+        private async Task AnimateWheelToResult(int result)
+        {
+            if (WheelRotate == null) return;
+
+            int idx = Array.IndexOf(WheelOrder, result);
+            if (idx < 0) idx = 0;
+
+            double step = 360.0 / WheelOrder.Length;
+            int spins = 6 + _rng.Next(0, 3); // 6-8 full spins
+
+            // target: segment idx center to top (-90). Our segments are laid starting at -90, so:
+            double target = (-idx * step) - (spins * 360.0);
+
+            var tcs = new TaskCompletionSource<bool>();
+
+            var anim = new DoubleAnimation
+            {
+                From = _wheelAngle,
+                To = target,
+                Duration = TimeSpan.FromMilliseconds(1800),
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+
+            anim.Completed += (_, __) =>
+            {
+                _wheelAngle = target % 360.0;
+                WheelRotate.Angle = _wheelAngle;
+                tcs.TrySetResult(true);
+            };
+
+            WheelRotate.BeginAnimation(RotateTransform.AngleProperty, anim);
+            await tcs.Task;
+        }
 
         private static Path MakeWedge(double cx, double cy, double r0, double r1, double a0Deg, double a1Deg, Brush fill)
         {
@@ -306,7 +400,8 @@ namespace BluesBar.Gambloo.Scenes
                 Fill = fill,
                 Stroke = Brushes.Black,
                 StrokeThickness = 1,
-                Opacity = 1.0
+                Opacity = 1.0,
+                IsHitTestVisible = false
             };
         }
 
@@ -316,73 +411,42 @@ namespace BluesBar.Gambloo.Scenes
             return new Point(cx + r * Math.Cos(rad), cy + r * Math.Sin(rad));
         }
 
-        private async Task AnimateWheelToResult(int result)
-        {
-            int idx = Array.IndexOf(WheelOrder, result);
-            if (idx < 0) idx = 0;
-
-            // Want segment center at top (-90). Since our segment centers already start at -90,
-            // rotate wheel by -idx*step (plus extra spins).
-            double step = 360.0 / WheelOrder.Length;
-
-            int spins = 6 + _rng.Next(0, 3); // 6-8 full spins
-            double target = (-idx * step) - (spins * 360.0);
-
-            // Animate from current to target
-            var tcs = new TaskCompletionSource<bool>();
-
-            var anim = new DoubleAnimation
-            {
-                From = _wheelAngle,
-                To = target,
-                Duration = TimeSpan.FromMilliseconds(1800),
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            };
-
-            anim.Completed += (_, __) =>
-            {
-                _wheelAngle = target % 360.0;
-                WheelRotate.Angle = _wheelAngle;
-                tcs.TrySetResult(true);
-            };
-
-            WheelRotate.BeginAnimation(RotateTransform.AngleProperty, anim);
-
-            await tcs.Task;
-        }
-
         // -------------------------
-        // Table build + betting
+        // Table build + betting (WIDE)
         // -------------------------
-
-        private void TableCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
-        {
-            // Prevent spam redraw while layout is still settling
-            if (TableCanvas.ActualWidth < 50 || TableCanvas.ActualHeight < 50) return;
-
-            BuildTable(); // <-- your method that draws the felt + regions
-        }
         private void BuildTable()
         {
             if (TableCanvas == null) return;
 
             double cw = TableCanvas.ActualWidth;
             double ch = TableCanvas.ActualHeight;
-            if (cw < 50 || ch < 50) return;
+            if (cw < 80 || ch < 80) return;
 
             TableCanvas.Children.Clear();
             TableCanvas.Background = new SolidColorBrush(Color.FromRgb(0x0F, 0x2A, 0x18)); // felt
 
+            _regions.Clear();
+
+            if (ChipOverlayCanvas != null)
+            {
+                ChipOverlayCanvas.Children.Clear();
+                ChipOverlayCanvas.Width = cw;
+                ChipOverlayCanvas.Height = ch;
+            }
+
+            // Keep already-placed chips, just rebuild visuals at new positions
+            _chipVisuals.Clear();
+
             // ----------------------------
-            // WIDE grid: 3 rows x 12 cols
+            // Scale-to-fit geometry
             // ----------------------------
             const double baseCellW = 52;
             const double baseCellH = 44;
             const double basePad = 14;
             const double baseGap = 10;
-            const double baseZeroW = 58;     // 0 box width
-            const double baseOutH = 42;     // outside bet height
-            const double baseDozH = 36;     // dozens height
+            const double baseZeroW = 58;
+            const double baseOutH = 42;
+            const double baseDozH = 36;
 
             int cols = 12;
             int rows = 3;
@@ -390,14 +454,11 @@ namespace BluesBar.Gambloo.Scenes
             double baseGridW = baseCellW * cols;
             double baseGridH = baseCellH * rows;
 
-            // total footprint:
-            // pad + (zero box) + gap + (grid) + pad
-            // height: pad + grid + gap + outside + gap + dozens + pad
             double baseTotalW = basePad + baseZeroW + baseGap + baseGridW + basePad;
             double baseTotalH = basePad + baseGridH + baseGap + baseOutH + baseGap + baseDozH + basePad;
 
             double scale = Math.Min(cw / baseTotalW, ch / baseTotalH);
-            scale = Math.Max(0.65, Math.Min(1.45, scale));
+            scale = Math.Max(0.65, Math.Min(1.55, scale));
 
             double CellW = baseCellW * scale;
             double CellH = baseCellH * scale;
@@ -407,22 +468,18 @@ namespace BluesBar.Gambloo.Scenes
             double OutH = baseOutH * scale;
             double DozH = baseDozH * scale;
 
-            double HitPadLocal = Math.Max(6, HitPad * scale);
+            double HitPad = Math.Max(6, 10 * scale);
 
-            // Center the whole layout
             double tableW = Pad + ZeroW + Gap + (CellW * cols) + Pad;
             double tableH = Pad + (CellH * rows) + Gap + OutH + Gap + DozH + Pad;
 
             double x0 = Math.Max(0, (cw - tableW) * 0.5);
             double y0 = Math.Max(0, (ch - tableH) * 0.5);
 
-            // Main grid rect
             _rectGrid = new Rect(x0 + Pad + ZeroW + Gap, y0 + Pad, CellW * cols, CellH * rows);
-
-            // Zero rect (spans full grid height)
             _rectZero = new Rect(x0 + Pad, _rectGrid.Top, ZeroW, _rectGrid.Height);
 
-            // Outside bets row (6 across under grid)
+            // Outside row (6)
             double outsideY = _rectGrid.Bottom + Gap;
             double outsideW = _rectGrid.Width / 6.0;
 
@@ -433,7 +490,7 @@ namespace BluesBar.Gambloo.Scenes
             _rectOdd = new Rect(_rectGrid.Left + outsideW * 4, outsideY, outsideW, OutH);
             _rectHigh = new Rect(_rectGrid.Left + outsideW * 5, outsideY, outsideW, OutH);
 
-            // Dozens row (3 across)
+            // Dozens row (3)
             double dozenY = outsideY + OutH + Gap;
             double dozenW = _rectGrid.Width / 3.0;
 
@@ -441,39 +498,34 @@ namespace BluesBar.Gambloo.Scenes
             _rectDozen2 = new Rect(_rectGrid.Left + dozenW * 1, dozenY, dozenW, DozH);
             _rectDozen3 = new Rect(_rectGrid.Left + dozenW * 2, dozenY, dozenW, DozH);
 
-            // ----------------------------
-            // Draw 0
-            // ----------------------------
-            DrawBox(_rectZero, "0", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1F, 0x7A, 0x3B)));
-            AddBetRegion(ExpandRect(_rectZero, HitPadLocal), RouletteBet.CreateStraight(0, 0), "Straight 0");
-
-            // Helpful outline around grid
+            // Outline
             var outline = new Rectangle
             {
                 Width = _rectGrid.Width,
                 Height = _rectGrid.Height,
                 Stroke = new SolidColorBrush(Color.FromRgb(0x6F, 0xC3, 0xE2)),
                 StrokeThickness = Math.Max(1.5, 2 * scale),
-                Opacity = 0.8,
+                Opacity = 0.65,
+                RadiusX = 10,
+                RadiusY = 10,
                 IsHitTestVisible = false
             };
             Canvas.SetLeft(outline, _rectGrid.Left);
             Canvas.SetTop(outline, _rectGrid.Top);
             TableCanvas.Children.Add(outline);
 
-            // ----------------------------
-            // Numbers 1..36 in WIDE layout:
-            // row0: 1,4,7,...,34
-            // row1: 2,5,8,...,35
-            // row2: 3,6,9,...,36
-            // ----------------------------
+            // Draw 0 (spans full height)
+            DrawBox(_rectZero, "0", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1F, 0x7A, 0x3B)), fontScale: 1.0);
+            AddBetRegion(_rectZero.Expand(HitPad), AnchorCenter(_rectZero), RouletteBet.CreateStraight(0), "Straight 0");
+
+            // Map numbers in wide layout
             int NumAt(int row, int col)
             {
-                // col 0 => base=1, col 1 => base=4 ... base = 1 + col*3
                 int baseN = 1 + col * 3;
-                return baseN + row; // row 0 => base, row1 => base+1, row2 => base+2
+                return baseN + row; // row 0 => base, 1 => base+1, 2 => base+2
             }
 
+            // Number cells
             for (int col = 0; col < cols; col++)
             {
                 for (int row = 0; row < rows; row++)
@@ -486,51 +538,46 @@ namespace BluesBar.Gambloo.Scenes
                         CellW,
                         CellH);
 
-                    DrawBox(cell, n.ToString(), Brushes.White, (Brush)BrushForNumber(n));
-                    AddBetRegion(ExpandRect(cell, HitPadLocal), RouletteBet.CreateStraight(n, 0), $"Straight {n}");
+                    DrawBox(cell, n.ToString(), Brushes.White, BrushForNumber(n), fontScale: 1.0);
+                    AddBetRegion(cell.Expand(HitPad), AnchorCenter(cell), RouletteBet.CreateStraight(n), $"Straight {n}");
                 }
             }
 
-            // ----------------------------
-            // SPLITS
-            // 1) Horizontal splits (adjacent columns, same row): +3
-            // ----------------------------
+            // Splits: horizontal (adjacent cols, same row): +3
             for (int col = 0; col < cols - 1; col++)
             {
                 for (int row = 0; row < rows; row++)
                 {
                     int a = NumAt(row, col);
-                    int b = NumAt(row, col + 1); // +3
+                    int b = NumAt(row, col + 1);
 
                     double lx = _rectGrid.Left + (col + 1) * CellW;
                     double ty = _rectGrid.Top + row * CellH;
 
                     Rect band = new Rect(lx - (6 * scale), ty + (6 * scale), (12 * scale), CellH - (12 * scale));
-                    AddBetRegion(ExpandRect(band, HitPadLocal * 0.45), RouletteBet.CreateSplit(a, b, 0), $"Split {a},{b}");
+                    var anchor = new Point(lx, ty + CellH * 0.5);
+                    AddBetRegion(band.Expand(HitPad * 0.45), anchor, RouletteBet.CreateSplit(a, b), $"Split {a},{b}");
                 }
             }
 
-            // 2) Vertical splits (adjacent rows, same column): +1
+            // Splits: vertical (adjacent rows, same col): +1
             for (int col = 0; col < cols; col++)
             {
                 for (int row = 0; row < rows - 1; row++)
                 {
                     int a = NumAt(row, col);
-                    int b = NumAt(row + 1, col); // +1
+                    int b = NumAt(row + 1, col);
 
                     double lx = _rectGrid.Left + col * CellW;
                     double ty = _rectGrid.Top + (row + 1) * CellH;
 
                     Rect band = new Rect(lx + (6 * scale), ty - (6 * scale), CellW - (12 * scale), (12 * scale));
-                    AddBetRegion(ExpandRect(band, HitPadLocal * 0.45), RouletteBet.CreateSplit(a, b, 0), $"Split {a},{b}");
+                    var anchor = new Point(lx + CellW * 0.5, ty);
+                    AddBetRegion(band.Expand(HitPad * 0.45), anchor, RouletteBet.CreateSplit(a, b), $"Split {a},{b}");
                 }
             }
 
-            // ----------------------------
-            // CORNERS
-            // corners at intersections of 2 rows x 2 cols
-            // {n, n+1, n+3, n+4} mapping holds with this layout.
-            // ----------------------------
+            // Corners
             for (int col = 0; col < cols - 1; col++)
             {
                 for (int row = 0; row < rows - 1; row++)
@@ -544,16 +591,13 @@ namespace BluesBar.Gambloo.Scenes
                     double iy = _rectGrid.Top + (row + 1) * CellH;
 
                     Rect hot = new Rect(ix - (8 * scale), iy - (8 * scale), (16 * scale), (16 * scale));
-                    AddBetRegion(ExpandRect(hot, HitPadLocal * 0.35),
-                        RouletteBet.CreateCorner(new List<int> { n1, n2, n3, n4 }, 0),
+                    var anchor = new Point(ix, iy);
+                    AddBetRegion(hot.Expand(HitPad * 0.35), anchor, RouletteBet.CreateCorner(new List<int> { n1, n2, n3, n4 }),
                         $"Corner {n1},{n2},{n3},{n4}");
                 }
             }
 
-            // ----------------------------
-            // STREETS (3 numbers): each column is a street (base, base+1, base+2)
-            // put a small band at the bottom of each column (still clickable)
-            // ----------------------------
+            // Streets (each column = 3 numbers)
             for (int col = 0; col < cols; col++)
             {
                 int a = NumAt(0, col);
@@ -566,21 +610,18 @@ namespace BluesBar.Gambloo.Scenes
                     CellW - (12 * scale),
                     (28 * scale));
 
-                AddBetRegion(ExpandRect(band, HitPadLocal * 0.30),
-                    RouletteBet.CreateStreet(new List<int> { a, b, c }, 0),
-                    $"Street {a},{b},{c}");
+                var anchor = new Point(_rectGrid.Left + col * CellW + CellW * 0.5, _rectGrid.Bottom - CellH * 0.15);
+                AddBetRegion(band.Expand(HitPad * 0.30), anchor, RouletteBet.CreateStreet(new List<int> { a, b, c }), $"Street {a},{b},{c}");
             }
 
-            // ----------------------------
-            // SIX-LINES (two adjacent streets): columns col and col+1 (6 nums)
-            // ----------------------------
+            // Six-lines (two adjacent streets = two columns)
             for (int col = 0; col < cols - 1; col++)
             {
                 var nums = new List<int>
-        {
-            NumAt(0,col), NumAt(1,col), NumAt(2,col),
-            NumAt(0,col+1), NumAt(1,col+1), NumAt(2,col+1)
-        };
+                {
+                    NumAt(0,col), NumAt(1,col), NumAt(2,col),
+                    NumAt(0,col+1), NumAt(1,col+1), NumAt(2,col+1)
+                };
 
                 Rect hot = new Rect(
                     _rectGrid.Left + (col + 1) * CellW - (10 * scale),
@@ -588,51 +629,50 @@ namespace BluesBar.Gambloo.Scenes
                     (20 * scale),
                     (24 * scale));
 
-                AddBetRegion(ExpandRect(hot, HitPadLocal * 0.30),
-                    RouletteBet.CreateSixLine(nums, 0),
-                    $"SixLine {string.Join(",", nums)}");
+                var anchor = new Point(_rectGrid.Left + (col + 1) * CellW, _rectGrid.Top + CellH * 0.5);
+                AddBetRegion(hot.Expand(HitPad * 0.30), anchor, RouletteBet.CreateSixLine(nums), $"SixLine {string.Join(",", nums)}");
             }
 
-            // ----------------------------
             // Outside bets
-            // ----------------------------
-            DrawBox(_rectLow, "1-18", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)));
-            DrawBox(_rectEven, "EVEN", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)));
-            DrawBox(_rectRed, "RED", Brushes.White, new SolidColorBrush(Color.FromRgb(0x6A, 0x12, 0x12)));
-            DrawBox(_rectBlack, "BLACK", Brushes.White, new SolidColorBrush(Color.FromRgb(0x10, 0x10, 0x10)));
-            DrawBox(_rectOdd, "ODD", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)));
-            DrawBox(_rectHigh, "19-36", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)));
+            DrawBox(_rectLow, "1-18", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)), fontScale: 0.95);
+            DrawBox(_rectEven, "EVEN", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)), fontScale: 0.95);
+            DrawBox(_rectRed, "RED", Brushes.White, new SolidColorBrush(Color.FromRgb(0x6A, 0x12, 0x12)), fontScale: 0.95);
+            DrawBox(_rectBlack, "BLACK", Brushes.White, new SolidColorBrush(Color.FromRgb(0x10, 0x10, 0x10)), fontScale: 0.95);
+            DrawBox(_rectOdd, "ODD", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)), fontScale: 0.95);
+            DrawBox(_rectHigh, "19-36", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)), fontScale: 0.95);
 
-            AddBetRegion(ExpandRect(_rectLow, HitPadLocal), RouletteBet.CreateOutside("Low", 0), "Low");
-            AddBetRegion(ExpandRect(_rectEven, HitPadLocal), RouletteBet.CreateOutside("Even", 0), "Even");
-            AddBetRegion(ExpandRect(_rectRed, HitPadLocal), RouletteBet.CreateOutside("Red", 0), "Red");
-            AddBetRegion(ExpandRect(_rectBlack, HitPadLocal), RouletteBet.CreateOutside("Black", 0), "Black");
-            AddBetRegion(ExpandRect(_rectOdd, HitPadLocal), RouletteBet.CreateOutside("Odd", 0), "Odd");
-            AddBetRegion(ExpandRect(_rectHigh, HitPadLocal), RouletteBet.CreateOutside("High", 0), "High");
+            AddBetRegion(_rectLow.Expand(HitPad), AnchorCenter(_rectLow), RouletteBet.CreateOutside("Low"), "Low");
+            AddBetRegion(_rectEven.Expand(HitPad), AnchorCenter(_rectEven), RouletteBet.CreateOutside("Even"), "Even");
+            AddBetRegion(_rectRed.Expand(HitPad), AnchorCenter(_rectRed), RouletteBet.CreateOutside("Red"), "Red");
+            AddBetRegion(_rectBlack.Expand(HitPad), AnchorCenter(_rectBlack), RouletteBet.CreateOutside("Black"), "Black");
+            AddBetRegion(_rectOdd.Expand(HitPad), AnchorCenter(_rectOdd), RouletteBet.CreateOutside("Odd"), "Odd");
+            AddBetRegion(_rectHigh.Expand(HitPad), AnchorCenter(_rectHigh), RouletteBet.CreateOutside("High"), "High");
 
-            // ----------------------------
-            // Dozens (based on numeric ranges)
-            // 1-12 = first 4 columns, 13-24 = next 4, 25-36 = last 4
-            // ----------------------------
-            DrawBox(_rectDozen1, "1st 12", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)));
-            DrawBox(_rectDozen2, "2nd 12", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)));
-            DrawBox(_rectDozen3, "3rd 12", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)));
+            // Dozens
+            DrawBox(_rectDozen1, "1st 12", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)), fontScale: 0.95);
+            DrawBox(_rectDozen2, "2nd 12", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)), fontScale: 0.95);
+            DrawBox(_rectDozen3, "3rd 12", Brushes.White, new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)), fontScale: 0.95);
 
-            AddBetRegion(ExpandRect(_rectDozen1, HitPadLocal), RouletteBet.CreateDozenOrColumn("Dozen", 1, 0), "Dozen 1");
-            AddBetRegion(ExpandRect(_rectDozen2, HitPadLocal), RouletteBet.CreateDozenOrColumn("Dozen", 2, 0), "Dozen 2");
-            AddBetRegion(ExpandRect(_rectDozen3, HitPadLocal), RouletteBet.CreateDozenOrColumn("Dozen", 3, 0), "Dozen 3");
+            AddBetRegion(_rectDozen1.Expand(HitPad), AnchorCenter(_rectDozen1), RouletteBet.CreateDozen(1), "Dozen 1");
+            AddBetRegion(_rectDozen2.Expand(HitPad), AnchorCenter(_rectDozen2), RouletteBet.CreateDozen(2), "Dozen 2");
+            AddBetRegion(_rectDozen3.Expand(HitPad), AnchorCenter(_rectDozen3), RouletteBet.CreateDozen(3), "Dozen 3");
+
+            // Rebuild chip visuals at new anchors
+            foreach (var r in _regions)
+            {
+                if (_placed.TryGetValue(r.Key, out var amt) && amt > 0)
+                {
+                    EnsureChipVisual(r);
+                    UpdateChipVisual(r.Key);
+                }
+            }
+
+            RefreshStakeHud();
         }
 
+        private static Point AnchorCenter(Rect r) => new Point(r.Left + r.Width / 2.0, r.Top + r.Height / 2.0);
 
-
-        private static Rect ExpandRect(Rect r, double pad)
-            => new Rect(r.X - pad, r.Y - pad, r.Width + pad * 2, r.Height + pad * 2);
-
-        private static Rect ExpandRect(Rect r, double padX, double padY)
-            => new Rect(r.X - padX, r.Y - padY, r.Width + padX * 2, r.Height + padY * 2);
-
-
-        private void DrawBox(Rect r, string label, Brush text, Brush fill)
+        private void DrawBox(Rect r, string label, Brush text, Brush fill, double fontScale)
         {
             var rect = new Rectangle
             {
@@ -641,9 +681,10 @@ namespace BluesBar.Gambloo.Scenes
                 Fill = fill,
                 Stroke = new SolidColorBrush(Color.FromRgb(0x70, 0x70, 0x70)),
                 StrokeThickness = 1,
-                RadiusX = 6,
-                RadiusY = 6,
-                Opacity = 0.95
+                RadiusX = 8,
+                RadiusY = 8,
+                Opacity = 0.95,
+                IsHitTestVisible = false
             };
             Canvas.SetLeft(rect, r.Left);
             Canvas.SetTop(rect, r.Top);
@@ -654,8 +695,9 @@ namespace BluesBar.Gambloo.Scenes
                 Text = label,
                 Foreground = text,
                 FontFamily = new FontFamily("Consolas"),
-                FontSize = 14,
-                FontWeight = FontWeights.SemiBold
+                FontSize = 13 * fontScale,
+                FontWeight = FontWeights.SemiBold,
+                IsHitTestVisible = false
             };
 
             tb.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
@@ -666,16 +708,29 @@ namespace BluesBar.Gambloo.Scenes
             TableCanvas.Children.Add(tb);
         }
 
-        private void AddBetRegion(Rect r, RouletteBet betTemplate, string debugName)
+        private void AddBetRegion(Rect hitRect, Point anchor, RouletteBet proto, string hover)
         {
-            // Transparent clickable rectangle overlay
+            // Ensure stable key
+            string key = proto.Key;
+
+            var region = new BetRegion
+            {
+                Key = key,
+                Prototype = proto,
+                HitRect = hitRect,
+                Anchor = anchor,
+                HoverLabel = hover
+            };
+            _regions.Add(region);
+
+            // Transparent clickable overlay
             var hit = new Rectangle
             {
-                Width = r.Width,
-                Height = r.Height,
+                Width = hitRect.Width,
+                Height = hitRect.Height,
                 Fill = Brushes.Transparent,
                 Cursor = Cursors.Hand,
-                Tag = betTemplate
+                Tag = region
             };
 
             hit.MouseLeftButtonDown += (_, __) =>
@@ -684,74 +739,290 @@ namespace BluesBar.Gambloo.Scenes
 
                 if (!TryGetChip(out long chip) || chip <= 0)
                 {
-                    OutcomeText.Text = "Invalid chip amount.";
-                    OutcomeText.Foreground = Brushes.IndianRed;
+                    SetOutcome("Invalid chip amount.", Brushes.IndianRed);
                     return;
                 }
 
-                var b = (RouletteBet)hit.Tag!;
-                var actual = b.WithAmount(chip);
-
-                _slip.Add(actual);
-                RefreshSlipUi();
-
-                OutcomeText.Text = $"Added {actual.Kind} {actual.Brief()}  x {chip:N0}";
-                OutcomeText.Foreground = Brushes.White;
+                PlaceChip(region, chip);
             };
 
-            Canvas.SetLeft(hit, r.Left);
-            Canvas.SetTop(hit, r.Top);
+            Canvas.SetLeft(hit, hitRect.Left);
+            Canvas.SetTop(hit, hitRect.Top);
             TableCanvas.Children.Add(hit);
         }
 
+        private void TableCanvas_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (HoverBetText == null || TableCanvas == null) return;
+
+            var p = e.GetPosition(TableCanvas);
+            var r = HitTestRegion(p);
+            HoverBetText.Text = r?.HoverLabel ?? "";
+        }
+
+        private BetRegion? HitTestRegion(Point p)
+        {
+            // Scan from last-added to first (later overlays “win”)
+            for (int i = _regions.Count - 1; i >= 0; i--)
+            {
+                if (_regions[i].HitRect.Contains(p))
+                    return _regions[i];
+            }
+            return null;
+        }
+
         // -------------------------
-        // Buttons
+        // Chip placement visuals
         // -------------------------
-        private void ClearSlip_Click(object sender, RoutedEventArgs e)
+        private void PlaceChip(BetRegion r, long amount)
+        {
+            if (!_placed.ContainsKey(r.Key)) _placed[r.Key] = 0;
+            _placed[r.Key] += amount;
+            _undo.Push((r.Key, amount));
+
+            EnsureChipVisual(r);
+            UpdateChipVisual(r.Key);
+
+            RefreshStakeHud();
+            ClearOutcome();
+        }
+
+        private void EnsureChipVisual(BetRegion r)
+        {
+            if (ChipOverlayCanvas == null) return;
+            if (_chipVisuals.ContainsKey(r.Key)) return;
+
+            var puck = new Border
+            {
+                Width = 30,
+                Height = 30,
+                CornerRadius = new CornerRadius(15),
+                Background = new SolidColorBrush(Color.FromRgb(0xE5, 0xE7, 0xEB)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x11)),
+                BorderThickness = new Thickness(2),
+                Effect = new DropShadowEffect
+                {
+                    Color = Colors.Black,
+                    BlurRadius = 10,
+                    ShadowDepth = 0,
+                    Opacity = 0.45
+                },
+                Child = new TextBlock
+                {
+                    Text = "",
+                    Foreground = Brushes.Black,
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize = 11,
+                    FontWeight = FontWeights.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                },
+                IsHitTestVisible = false
+            };
+
+            Canvas.SetLeft(puck, r.Anchor.X - 15);
+            Canvas.SetTop(puck, r.Anchor.Y - 15);
+            ChipOverlayCanvas.Children.Add(puck);
+
+            _chipVisuals[r.Key] = puck;
+        }
+
+        private void UpdateChipVisual(string key)
+        {
+            if (!_chipVisuals.TryGetValue(key, out var puck)) return;
+            if (puck.Child is not TextBlock t) return;
+
+            long v = _placed.TryGetValue(key, out var amt) ? amt : 0;
+            if (v <= 0)
+            {
+                // remove
+                if (ChipOverlayCanvas != null)
+                    ChipOverlayCanvas.Children.Remove(puck);
+
+                _chipVisuals.Remove(key);
+                return;
+            }
+
+            t.Text = v >= 1_000_000 ? $"{v / 1_000_000}M"
+                 : v >= 1_000 ? $"{v / 1_000}k"
+                 : v.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private void ClearPlacedBets(bool clearUndo = true)
+        {
+            _placed.Clear();
+            if (clearUndo) _undo.Clear();
+
+            if (ChipOverlayCanvas != null)
+                ChipOverlayCanvas.Children.Clear();
+
+            _chipVisuals.Clear();
+            RefreshStakeHud();
+        }
+
+        // -------------------------
+        // Buttons (wired from XAML)
+        // -------------------------
+        private void RebetAndSpin_Click(object sender, RoutedEventArgs e)
         {
             if (IsBusy) return;
-            _slip.Clear();
-            RefreshSlipUi();
-            OutcomeText.Text = "Cleared slip.";
-            OutcomeText.Foreground = Brushes.White;
+
+            if (_lastRoundPlaced == null || _lastRoundPlaced.Count == 0)
+            {
+                SetOutcome("No previous bet to rebet.", Brushes.IndianRed);
+                return;
+            }
+
+            _placed.Clear();
+            foreach (var kv in _lastRoundPlaced)
+                _placed[kv.Key] = kv.Value;
+
+            RedrawPlacedChips();
+            RefreshStakeHud();
+
+            Spin_Click(SpinButton, new RoutedEventArgs());
+        }
+        private void ClearBets_Click(object sender, RoutedEventArgs e)
+        {
+            if (IsBusy) return;
+            ClearPlacedBets(clearUndo: true);
+            SetOutcome("Cleared bets.", Brushes.White);
+        }
+
+        private void UndoBet_Click(object sender, RoutedEventArgs e)
+        {
+            if (IsBusy) return;
+            if (_undo.Count == 0) return;
+
+            var (key, delta) = _undo.Pop();
+
+            if (_placed.TryGetValue(key, out var cur))
+            {
+                cur -= delta;
+                if (cur <= 0) _placed.Remove(key);
+                else _placed[key] = cur;
+
+                UpdateChipVisual(key);
+                RefreshStakeHud();
+                ClearOutcome();
+            }
+        }
+
+        private void Rebet_Click(object sender, RoutedEventArgs e)
+        {
+            if (IsBusy) return;
+            if (_lastRoundPlaced.Count == 0)
+            {
+                SetOutcome("No last round bets to rebet.", Brushes.IndianRed);
+                return;
+            }
+
+            ClearPlacedBets(clearUndo: true);
+
+            foreach (var kv in _lastRoundPlaced)
+                _placed[kv.Key] = kv.Value;
+
+            // rebuild chip visuals from regions (anchors)
+            foreach (var r in _regions)
+            {
+                if (_placed.TryGetValue(r.Key, out var amt) && amt > 0)
+                {
+                    EnsureChipVisual(r);
+                    UpdateChipVisual(r.Key);
+                }
+            }
+
+            RefreshStakeHud();
+            SetOutcome("Rebet placed.", Brushes.White);
         }
 
         private void ClearHistory_Click(object sender, RoutedEventArgs e)
         {
             _history.Clear();
-            RefreshHistoryUi();
+            RefreshHistoryTiles();
         }
 
         // -------------------------
         // Spin
         // -------------------------
+        private void RedrawPlacedChips()
+        {
+            if (ChipOverlayCanvas == null) return;
+
+            ChipOverlayCanvas.Children.Clear();
+
+            // Draw in a stable order (regions order) so overlaps feel consistent
+            foreach (var r in _regions)
+            {
+                if (string.IsNullOrWhiteSpace(r.Key)) continue;
+
+                if (_placed.TryGetValue(r.Key, out var amt) && amt > 0)
+                    DrawChipAt(r.Anchor, amt);
+            }
+        }
+
+        private void DrawChipAt(Point anchor, long amount)
+        {
+            if (ChipOverlayCanvas == null) return;
+
+            // Slightly larger for readability, still compact
+            const double size = 28;
+
+            var chip = new Border
+            {
+                Width = size,
+                Height = size,
+                CornerRadius = new CornerRadius(size / 2),
+                Background = new SolidColorBrush(Color.FromRgb(0xE5, 0xE7, 0xEB)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0xD1, 0xD5, 0xDB)),
+                BorderThickness = new Thickness(2),
+                Child = new TextBlock
+                {
+                    Text = FormatChip(amount),
+                    Foreground = Brushes.Black,
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize = 11,
+                    FontWeight = FontWeights.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                },
+                IsHitTestVisible = false
+            };
+
+            // Center on anchor
+            Canvas.SetLeft(chip, anchor.X - size / 2);
+            Canvas.SetTop(chip, anchor.Y - size / 2);
+
+            ChipOverlayCanvas.Children.Add(chip);
+        }
+
+        private static string FormatChip(long amt)
+        {
+            if (amt >= 1_000_000) return (amt / 1_000_000d).ToString("0.#", CultureInfo.InvariantCulture) + "M";
+            if (amt >= 1_000) return (amt / 1_000d).ToString("0.#", CultureInfo.InvariantCulture) + "K";
+            return amt.ToString(CultureInfo.InvariantCulture);
+        }
+
+
         private async void Spin_Click(object sender, RoutedEventArgs e)
         {
             if (IsBusy) return;
 
-            if (_slip.Count == 0)
-            {
-                OutcomeText.Text = "Place bets on the table first.";
-                OutcomeText.Foreground = Brushes.IndianRed;
-                return;
-            }
-
-            long stake = _slip.Sum(x => x.Amount);
+            long stake = _placed.Values.Sum();
             if (stake <= 0)
             {
-                OutcomeText.Text = "Invalid stake.";
-                OutcomeText.Foreground = Brushes.IndianRed;
+                SetOutcome("Place bets on the table first.", Brushes.IndianRed);
                 return;
             }
 
             // Spend up front
             if (!ProfileManager.Instance.Spend(stake, "Roulette Stake"))
             {
-                OutcomeText.Text = "Not enough coins.";
-                OutcomeText.Foreground = Brushes.IndianRed;
+                SetOutcome("Not enough coins.", Brushes.IndianRed);
                 RefreshWalletHud();
                 return;
             }
+            _lastRoundPlaced = new Dictionary<string, long>(_placed);
 
             ClearWheelHighlights();
             if (LandingText != null) LandingText.Text = "--";
@@ -759,28 +1030,37 @@ namespace BluesBar.Gambloo.Scenes
             RefreshWalletHud();
             SetBusy(true);
 
-            // Choose result (0..36)
             int result = _rng.Next(0, 37);
 
-            // Animate wheel to that result (visual sync)
             await AnimateWheelToResult(result);
 
             HighlightWheelNumber(result);
 
-            // Landing label (new XAML name)
             if (LandingText != null)
                 LandingText.Text = $"{result} {ColorName(result)}";
 
-            // Display result
-            ResultText.Text = result.ToString();
-            ResultChip.Background = BrushForNumber(result);
-            ResultColorText.Text = ColorName(result);
-            ResultColorChip.Background = BrushForNumber(result);
+            if (ResultText != null) ResultText.Text = result.ToString(CultureInfo.InvariantCulture);
+            if (ResultChip != null) ResultChip.Background = BrushForNumber(result);
+            if (ResultColorText != null) ResultColorText.Text = ColorName(result);
+            if (ResultColorChip != null) ResultColorChip.Background = BrushForNumber(result);
 
-            // Resolve returns
+            // Resolve returns by iterating placed chips + matching regions/prototypes
             long totalReturn = 0;
-            foreach (var bet in _slip)
+
+            // Fast lookup from key -> prototype
+            // (regions rebuilt on BuildTable; keys are stable)
+            var protoByKey = _regions
+                .GroupBy(r => r.Key)
+                .ToDictionary(g => g.Key, g => g.First().Prototype);
+
+            foreach (var kv in _placed)
+            {
+                if (kv.Value <= 0) continue;
+                if (!protoByKey.TryGetValue(kv.Key, out var proto)) continue;
+
+                var bet = proto.WithAmount(kv.Value);
                 totalReturn += bet.ResolveReturn(result, Reds);
+            }
 
             long profit = totalReturn - stake;
 
@@ -788,14 +1068,14 @@ namespace BluesBar.Gambloo.Scenes
                 ProfileManager.Instance.Earn(totalReturn, "Roulette Payout");
 
             RefreshWalletHud();
-            PushHistory(result);
 
-            OutcomeText.Text = profit >= 0 ? $"+{profit:N0} profit" : $"{profit:N0} loss";
-            OutcomeText.Foreground = profit >= 0 ? Brushes.LightGreen : Brushes.IndianRed;
+            PushHistoryTile(result);
 
-            // Clear slip after spin
-            _slip.Clear();
-            RefreshSlipUi();
+            SetOutcome(profit >= 0 ? $"+{profit:N0} profit" : $"{profit:N0} loss",
+                       profit >= 0 ? Brushes.LightGreen : Brushes.IndianRed);
+
+            // Casino-style: clear bets after spin
+            ClearPlacedBets(clearUndo: true);
 
             SetBusy(false);
         }
@@ -805,9 +1085,118 @@ namespace BluesBar.Gambloo.Scenes
             IsBusy = busy;
             BusyChanged?.Invoke(busy);
 
-            SpinButton.IsEnabled = !busy;
-            ChipTextBox.IsEnabled = !busy;
+            if (SpinButton != null) SpinButton.IsEnabled = !busy;
+            if (ChipTextBox != null) ChipTextBox.IsEnabled = !busy;
         }
+
+        // -------------------------
+        // History tiles (color squares with number text)
+        // -------------------------
+        private void ResizeHistoryGrid()
+        {
+            if (HistoryTiles == null) return;
+
+            // UniformGrid doesn't always have width at first layout pass
+            double w = HistoryTiles.ActualWidth;
+            if (w <= 1) return;
+
+            // Tile math: (tile width 44) + margin/padding (~8)
+            double stride = 52;
+
+            int cols = (int)Math.Floor(w / stride);
+            cols = Math.Max(8, Math.Min(16, cols));   // clamp so it stays readable
+
+            HistoryTiles.Columns = cols;
+        }
+        private void PushHistoryTile(int number)
+        {
+            _history.Insert(0, number);
+
+            if (_history.Count > MaxHistory)
+                _history.RemoveAt(_history.Count - 1);
+            RefreshHistoryTiles();
+        }
+
+        private void RefreshHistoryTiles()
+        {
+            if (HistoryTiles == null) return;
+
+            HistoryTiles.Children.Clear();
+
+            for (int i = 0; i < _history.Count; i++)
+            {
+                int n = _history[i];
+
+                var tile = new Border
+                {
+                    Width = 18,
+                    Height = 18,
+                    CornerRadius = new CornerRadius(3),
+                    Background = BrushForNumber(n),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(0x22, 0x32, 0x4A)),
+                    BorderThickness = new Thickness(1),
+                    Margin = new Thickness(1),
+                    Child = new TextBlock
+                    {
+                        Text = n.ToString(CultureInfo.InvariantCulture),
+                        Foreground = Brushes.White,
+                        FontFamily = new FontFamily("Consolas"),
+                        FontSize = 9,
+                        FontWeight = FontWeights.Bold,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                };
+
+                // Most recent: louder border + slight scale + small glow
+                if (i == 0)
+                {
+                    tile.BorderBrush = new SolidColorBrush(Color.FromRgb(0x6F, 0xC3, 0xE2));
+                    tile.BorderThickness = new Thickness(2);
+                    tile.RenderTransformOrigin = new Point(0.5, 0.5);
+                    tile.RenderTransform = new ScaleTransform(1.12, 1.12);
+                    tile.Effect = new DropShadowEffect
+                    {
+                        Color = Color.FromRgb(0x6F, 0xC3, 0xE2),
+                        BlurRadius = 10,
+                        ShadowDepth = 0,
+                        Opacity = 0.55
+                    };
+                }
+
+                HistoryTiles.Children.Add(tile);
+            }
+        }
+        private void SeedFakeHistory(int count = 50)
+        {
+            // believable-ish distribution:
+            // - greens: ~3-5% (European roulette is 1/37 ≈ 2.7%, but a tiny bit higher "to draw them in")
+            // - otherwise red/black roughly balanced
+            if (_history == null) return;
+
+            _history.Clear();
+
+            // Put a few recent-looking numbers first (optional)
+            // Then fill the rest.
+            for (int i = 0; i < count; i++)
+            {
+                int n = RollBelievableHistoryNumber();
+                _history.Add(n);
+            }
+
+            RefreshHistoryTiles();
+        }
+
+        private int RollBelievableHistoryNumber()
+        {
+            // Greens: ~4%
+            if (_rng.NextDouble() < 0.04)
+                return 0;
+
+            // Otherwise 1..36 uniformly
+            return _rng.Next(1, 37);
+        }
+
 
         // -------------------------
         // Models
@@ -815,30 +1204,68 @@ namespace BluesBar.Gambloo.Scenes
         private sealed class RouletteBet
         {
             public string Kind { get; private set; } = "Straight";
-            public long Amount { get; private set; }
-            public List<int> Numbers { get; private set; } = new(); // inside bets
-            public int Selector { get; private set; } = 0;          // dozen/column 1-3
+            public long Amount { get; private set; } = 0;
 
-            public static RouletteBet CreateOutside(string kind, long amt) =>
-                new RouletteBet { Kind = kind, Amount = amt };
+            // Inside bets
+            public List<int> Numbers { get; private set; } = new();
 
-            public static RouletteBet CreateDozenOrColumn(string kind, int selector, long amt) =>
-                new RouletteBet { Kind = kind, Selector = selector, Amount = amt };
+            // Dozen/Column selector 1..3
+            public int Selector { get; private set; } = 0;
 
-            public static RouletteBet CreateStraight(int n, long amt) =>
-                new RouletteBet { Kind = "Straight", Amount = amt, Numbers = new List<int> { n } };
+            // Stable dictionary key for placed-chip map (ignores Amount on purpose)
+            public string Key
+            {
+                get
+                {
+                    return Kind switch
+                    {
+                        "Straight" => $"Straight:{Numbers[0]}",
 
-            public static RouletteBet CreateSplit(int a, int b, long amt) =>
-                new RouletteBet { Kind = "Split", Amount = amt, Numbers = new List<int> { a, b } };
+                        "Split" =>
+                            $"Split:{Math.Min(Numbers[0], Numbers[1])}-{Math.Max(Numbers[0], Numbers[1])}",
 
-            public static RouletteBet CreateStreet(List<int> ns, long amt) =>
-                new RouletteBet { Kind = "Street", Amount = amt, Numbers = ns.ToList() };
+                        "Street" =>
+                            $"Street:{string.Join("-", Numbers.OrderBy(x => x))}",
 
-            public static RouletteBet CreateCorner(List<int> ns, long amt) =>
-                new RouletteBet { Kind = "Corner", Amount = amt, Numbers = ns.ToList() };
+                        "Corner" =>
+                            $"Corner:{string.Join("-", Numbers.OrderBy(x => x))}",
 
-            public static RouletteBet CreateSixLine(List<int> ns, long amt) =>
-                new RouletteBet { Kind = "SixLine", Amount = amt, Numbers = ns.ToList() };
+                        "SixLine" =>
+                            $"SixLine:{string.Join("-", Numbers.OrderBy(x => x))}",
+
+                        "Dozen" => $"Dozen:{Selector}",
+                        "Column" => $"Column:{Selector}",
+
+                        // outside (Red/Black/Odd/Even/Low/High/Green)
+                        _ => Kind
+                    };
+                }
+            }
+
+            // ---- factories (amount = 0 by default, because "placed" dict stores the total)
+            public static RouletteBet CreateOutside(string kind) =>
+                new RouletteBet { Kind = kind, Amount = 0 };
+
+            public static RouletteBet CreateDozen(int selector) =>
+                new RouletteBet { Kind = "Dozen", Selector = selector, Amount = 0 };
+
+            public static RouletteBet CreateColumn(int selector) =>
+                new RouletteBet { Kind = "Column", Selector = selector, Amount = 0 };
+
+            public static RouletteBet CreateStraight(int n) =>
+                new RouletteBet { Kind = "Straight", Amount = 0, Numbers = new List<int> { n } };
+
+            public static RouletteBet CreateSplit(int a, int b) =>
+                new RouletteBet { Kind = "Split", Amount = 0, Numbers = new List<int> { a, b } };
+
+            public static RouletteBet CreateStreet(List<int> ns) =>
+                new RouletteBet { Kind = "Street", Amount = 0, Numbers = ns.ToList() };
+
+            public static RouletteBet CreateCorner(List<int> ns) =>
+                new RouletteBet { Kind = "Corner", Amount = 0, Numbers = ns.ToList() };
+
+            public static RouletteBet CreateSixLine(List<int> ns) =>
+                new RouletteBet { Kind = "SixLine", Amount = 0, Numbers = ns.ToList() };
 
             public RouletteBet WithAmount(long amt)
             {
@@ -846,19 +1273,8 @@ namespace BluesBar.Gambloo.Scenes
                 {
                     Kind = Kind,
                     Amount = amt,
-                    Numbers = Numbers.ToList(),
-                    Selector = Selector
-                };
-            }
-
-            public string Brief()
-            {
-                return Kind switch
-                {
-                    "Straight" or "Split" or "Street" or "Corner" or "SixLine" => $"[{string.Join(",", Numbers)}]",
-                    "Dozen" => $"[D{Selector}]",
-                    "Column" => $"[C{Selector}]",
-                    _ => ""
+                    Selector = Selector,
+                    Numbers = Numbers.ToList()
                 };
             }
 
@@ -895,8 +1311,6 @@ namespace BluesBar.Gambloo.Scenes
                     "Even" => result != 0 && (result % 2 == 0),
                     "High" => result >= 19 && result <= 36,
                     "Low" => result >= 1 && result <= 18,
-
-                    // 0 only (European)
                     "Green" => result == 0,
 
                     _ => false
@@ -923,54 +1337,14 @@ namespace BluesBar.Gambloo.Scenes
 
                 return Amount * (profitOdds + 1L);
             }
-
-            public long GetReturnIfWin()
-            {
-                int profitOdds = Kind switch
-                {
-                    "Straight" => 35,
-                    "Split" => 17,
-                    "Street" => 11,
-                    "Corner" => 8,
-                    "SixLine" => 5,
-                    "Dozen" => 2,
-                    "Column" => 2,
-                    "Green" => 35,
-                    "Red" or "Black" or "Odd" or "Even" or "High" or "Low" => 1,
-                    _ => 0
-                };
-
-                return Amount * (profitOdds + 1L);
-            }
-
-            public string ToDisplayString()
-            {
-                string sel = Brief();
-                return $"{Kind,-8} {sel,-14} x {Amount:N0}";
-            }
         }
-
-        private readonly record struct SpinResult(int Number, string ColorName)
-        {
-            public string ToDisplayString() => $"{Number,2}  {ColorName}";
-        }
-
-
     }
-
 
     internal static class UiExt
     {
-        public static T WithPos<T>(this T el, double x, double y) where T : FrameworkElement
-        {
-            Canvas.SetLeft(el, x);
-            Canvas.SetTop(el, y);
-            return el;
-        }
         internal static Rect Expand(this Rect r, double pad)
-        {
-            return new Rect(r.Left - pad, r.Top - pad, r.Width + pad * 2, r.Height + pad * 2);
-        }
+            => new Rect(r.Left - pad, r.Top - pad, r.Width + pad * 2, r.Height + pad * 2);
     }
 }
+
 
