@@ -1,6 +1,7 @@
 # BluesBar
 * Basic Main Menu (Final Version coming soon...)
 * AimTrainerIntegration (Challenge mode coin rewards)
+* Gambling Modes:
   * Blackjack
   * RideTheBus
   * Roulette
