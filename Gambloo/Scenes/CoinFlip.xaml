@@ -1,4 +1,4 @@
-﻿<UserControl x:Class="BluesBar.Gambloo.Scenes.BlackjackScene"
+﻿<UserControl x:Class="BluesBar.Gambloo.Scenes.CoinFlipScene"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Background="#0B0F16">
@@ -43,6 +43,21 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style TargetType="Button" x:Key="PrimaryButton" BasedOn="{StaticResource NeoButton}">
+            <Setter Property="Background" Value="#2F6D3A"/>
+            <Setter Property="BorderBrush" Value="#3FA34D"/>
+            <Setter Property="FontFamily" Value="Segoe UI Black"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="Padding" Value="14,10"/>
+        </Style>
+
+        <Style TargetType="Button" x:Key="EmergencyButton" BasedOn="{StaticResource NeoButton}">
+            <Setter Property="Background" Value="#3B1118"/>
+            <Setter Property="BorderBrush" Value="#B91C1C"/>
+            <Setter Property="FontFamily" Value="Segoe UI Black"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
     </UserControl.Resources>
 
     <Grid Margin="14">
@@ -52,18 +67,18 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- header -->
+        <!-- Header -->
         <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Stroke}" BorderThickness="2"
                 CornerRadius="16" Padding="12" Margin="0,0,0,12">
-            <DockPanel>
+            <DockPanel LastChildFill="False">
                 <StackPanel DockPanel.Dock="Left">
-                    <TextBlock Text="Blackjack" Foreground="White" FontFamily="Segoe UI Black" FontSize="18"/>
+                    <TextBlock Text="CoinFlip" Foreground="White" FontFamily="Segoe UI Black" FontSize="18"/>
                     <TextBlock x:Name="WalletText" Text="Savings: 0 Coins" Foreground="{StaticResource TextDim}" FontSize="12"/>
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="Bet" Foreground="{StaticResource TextDim}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <TextBox x:Name="BetTextBox" Width="120" Height="30" Text="100"
+                    <TextBox x:Name="BetTextBox" Width="140" Height="30" Text="100"
                              Foreground="White" Background="#0B1220"
                              BorderBrush="{StaticResource Stroke}" BorderThickness="2"
                              Padding="8,4" VerticalContentAlignment="Center"/>
@@ -73,74 +88,69 @@
             </DockPanel>
         </Border>
 
-        <!-- table -->
-        <Border Grid.Row="1"
-        Background="{StaticResource Panel2}"
-        BorderBrush="{StaticResource Stroke}"
-        BorderThickness="2"
-        CornerRadius="16"
-        Padding="12">
-
-            <!-- One grid: headers auto, hands star so they occupy the center space -->
+        <!-- Arena -->
+        <Border Grid.Row="1" Background="{StaticResource Panel2}" BorderBrush="{StaticResource Stroke}" BorderThickness="2"
+                CornerRadius="16" Padding="12">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
-                    <!-- Dealer header -->
                     <RowDefinition Height="*"/>
-                    <!-- Dealer hand (centered) -->
                     <RowDefinition Height="Auto"/>
-                    <!-- Player header -->
-                    <RowDefinition Height="*"/>
-                    <!-- Player hand (centered) -->
                 </Grid.RowDefinitions>
 
-                <!-- dealer header -->
-                <DockPanel Grid.Row="0" Margin="0,0,0,10">
-                    <TextBlock Text="Dealer"
-                       Foreground="White"
-                       FontFamily="Segoe UI Black"
-                       FontSize="14" Width="55"/>
-                    <TextBlock x:Name="DealerScoreText"
-                       DockPanel.Dock="Right"
-                       Text="Score: --"
-                       Foreground="{StaticResource Accent}"
-                       FontFamily="Consolas"
-                       FontSize="13" Width="330"/>
-                </DockPanel>
+                <TextBlock x:Name="HintText" Text="Pick a side. Flip is double-or-nothing."
+                           Foreground="{StaticResource TextDim}" FontSize="12" Opacity="0.95"/>
 
-                <!-- dealer hand centered -->
-                <StackPanel Grid.Row="1"
-                    x:Name="DealerCardsPanel"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
-                    Margin="0,0,0,18"/>
+                <!-- Coin -->
+                <Grid Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <Border x:Name="Coin"
+                            Width="170" Height="170"
+                            CornerRadius="85"
+                            Background="#6F73E2"
+                            BorderBrush="{StaticResource Accent}"
+                            BorderThickness="4"
+                            RenderTransformOrigin="0.5,0.5">
+                        <Border.RenderTransform>
+                            <TransformGroup>
+                                <ScaleTransform x:Name="CoinScale" ScaleX="1" ScaleY="1"/>
+                                <RotateTransform x:Name="CoinRot" Angle="0"/>
+                            </TransformGroup>
+                        </Border.RenderTransform>
 
-                <!-- player header -->
-                <DockPanel Grid.Row="2" Margin="0,8,0,10">
-                    <TextBlock Text="You"
-                       Foreground="White"
-                       FontFamily="Segoe UI Black"
-                       FontSize="14" Width="55"/>
-                    <TextBlock x:Name="PlayerScoreText"
-                       DockPanel.Dock="Right"
-                       Text="Score: --"
-                       Foreground="{StaticResource Accent}"
-                       FontFamily="Consolas"
-                       FontSize="13" Width="330"/>
-                </DockPanel>
+                        <Grid>
+                            <TextBlock x:Name="CoinText"
+                                       Text="BB"
+                                       Foreground="#0B1220"
+                                       FontFamily="Segoe UI Black"
+                                       FontSize="48"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock x:Name="CoinSub"
+                                       Text="HEADS"
+                                       Foreground="#0B1220"
+                                       FontFamily="Consolas"
+                                       FontSize="14"
+                                       Opacity="0.75"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Bottom"
+                                       Margin="0,0,0,26"/>
+                        </Grid>
+                    </Border>
+                </Grid>
 
-                <!-- player hand centered -->
-                <StackPanel Grid.Row="3"
-                    x:Name="PlayerCardsPanel"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"/>
+                <!-- choice buttons -->
+                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0">
+                    <Button x:Name="HeadsButton" Content="HEADS" Width="120" Margin="0,0,12,0"
+                            Style="{StaticResource NeoButton}" Click="Heads_Click"/>
+                    <Button x:Name="TailsButton" Content="TAILS" Width="120" Margin="0,0,12,0"
+                            Style="{StaticResource NeoButton}" Click="Tails_Click"/>
+                    <Button x:Name="FlipButton" Content="FLIP" Width="140"
+                            Style="{StaticResource PrimaryButton}" Click="Flip_Click"/>
+                </StackPanel>
             </Grid>
         </Border>
 
-
-        <!-- controls -->
+        <!-- Footer -->
         <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Stroke}" BorderThickness="2"
                 CornerRadius="16" Padding="12" Margin="0,12,0,0">
             <Grid>
@@ -152,14 +162,12 @@
                 <TextBlock x:Name="OutcomeText" Text="" Foreground="White" FontFamily="Segoe UI Black" FontSize="13"
                            VerticalAlignment="Center"/>
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button x:Name="DealButton" Content="DEAL" Width="90" Style="{StaticResource NeoButton}" Click="Deal_Click"/>
-                    <Button x:Name="HitButton" Content="HIT" Width="90" Margin="10,0,0,0" Style="{StaticResource NeoButton}" Click="Hit_Click"/>
-                    <Button x:Name="StandButton" Content="STAND" Width="90" Margin="10,0,0,0" Style="{StaticResource NeoButton}" Click="Stand_Click"/>
-                    <Button x:Name="DoubleButton" Content="DOUBLE" Width="100" Margin="10,0,0,0" Style="{StaticResource NeoButton}" Click="Double_Click"/>
-                </StackPanel>
+                <Button Grid.Column="1" x:Name="RebetFlipButton"
+                        Content="REBET + FLIP"
+                        Width="140"
+                        Style="{StaticResource EmergencyButton}"
+                        Click="RebetFlip_Click"/>
             </Grid>
         </Border>
     </Grid>
 </UserControl>
-

@@ -15,9 +15,13 @@ namespace BluesBar.Rooms
 
             // Register scenes (real games later, placeholders now)
             _host.Register(new BlackjackScene());
+            _host.Register(new RideTheBusScene());
             _host.Register(new RouletteScene());
             _host.Register(new SlotsScene());
             _host.Register(new RocketCrashScene());
+            _host.Register(new BlinkoScene());
+            _host.Register(new CoinFlipScene());
+            _host.Register(new RockPaperScissorsScene());
 
             // Start on Blackjack
             SetScene("blackjack");
@@ -60,10 +64,15 @@ namespace BluesBar.Rooms
 
         // Nav buttons
         private void NavBlackjack_Click(object sender, RoutedEventArgs e) => SetScene("blackjack");
+        private void NavRideTheBus_Click(object sender, RoutedEventArgs e) => SetScene("ridethebus");
         private void NavRoulette_Click(object sender, RoutedEventArgs e) => SetScene("roulette");
         private void NavSlots_Click(object sender, RoutedEventArgs e) => SetScene("slots");
-
         private void NavRocketCrash_Click(object sender, RoutedEventArgs e) => SetScene("rocketcrash");
+        private void NavBlinko_Click(object sender, RoutedEventArgs e) => SetScene("blinko");
+        private void NavCoinFlip_Click(object sender, RoutedEventArgs e) => SetScene("coinflip");
+        private void NavRockPaperScissors_Click(object sender, RoutedEventArgs e) => SetScene("rockpaperscissors");
+
+
 
         // Title bar + window buttons
         private void TitleBar_MouseDown(object sender, MouseButtonEventArgs e)
