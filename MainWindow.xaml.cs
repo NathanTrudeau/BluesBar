@@ -4,6 +4,8 @@ using BluesShared;
 using System;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace BluesBar
 {
@@ -17,6 +19,7 @@ namespace BluesBar
         private GamblooWindow? _gambloo;
         private BackpackWindow? _backpack;
         private StoreWindow? _store;
+        private ProfileManagerWindow? _profileManager;
 
         public MainWindow()
         {
@@ -47,6 +50,20 @@ namespace BluesBar
                     MessageBoxImage.Error);
             } 
         }
+
+        private void OpenProfileManager_Click(object sender, RoutedEventArgs e)
+        {
+            _profileManager = OpenOrActivate(_profileManager, () =>
+            {
+                var w = new ProfileManagerWindow();
+                w.ProfileSaved += () =>
+                {
+                    RefreshProfileHud(); // reflect new username/color immediately
+                };
+                return w;
+            });
+        }
+
 
         private void OpenGambloo_Click(object sender, RoutedEventArgs e)
         {
@@ -95,6 +112,8 @@ namespace BluesBar
                 _aim = null;
             else if (ReferenceEquals(closed, _gambloo))
                 _gambloo = null;
+            else if (ReferenceEquals(closed, _profileManager))
+                _profileManager = null;
             else if (ReferenceEquals(closed, _backpack))
                 _backpack = null;
             else if (ReferenceEquals(closed, _store))
@@ -119,11 +138,36 @@ namespace BluesBar
         private void RefreshProfileHud()
         {
             var p = Systems.ProfileManager.Instance.Current;
+            var shared = Systems.ProfileManager.Instance.Shared;
+
+            // Detection scaffold update (pending accumulation)
+            bool changed = Systems.LevelProgression.DetectAndAccumulatePending(shared);
+            if (changed)
+                Systems.ProfileManager.Instance.Save();
+
+            // Derived level from Aim XP
+            var state = Systems.LevelCalculator.Compute(shared.LifetimeAimCoinsEarned);
 
             PlayerNameText.Text = p.PlayerName;
-            NetWorthText.Text = $"${p.NetWorth:N0}";
-            SavingsText.Text = $"{p.Coins:N0} Coins";
+
+            try
+            {
+                PlayerNameText.Foreground = (Brush)new BrushConverter().ConvertFromString(p.PlayerNameColorHex);
+            }
+            catch
+            {
+                PlayerNameText.Foreground = Brushes.DarkSlateBlue;
+            }
+
+            // New: level line (helmet later)
+            if (LevelLineText != null)
+                LevelLineText.Text = $"Lv {state.LevelInPrestige}";
+
+            // Existing money display
+            NetWorthText.Text = Systems.NumberFormat.AbbrevMoney((long)p.NetWorth);
+            SavingsText.Text = $"{Systems.NumberFormat.Abbrev(p.Coins)} Coins";
         }
+
 
         private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
@@ -134,39 +178,31 @@ namespace BluesBar
         {
             _profileSync = ProfileSync.CreateDefault();
 
-            // Ensure profile exists and hydrate your in-app ProfileManager
-            var profile = _profileSync.LoadOrCreateLocked();
-            BluesBar.Systems.ProfileManager.Instance.LoadOrCreate(); // if you already do this elsewhere, keep only one call
-
-            // Set displayed coins immediately
-            BluesBar.Systems.ProfileManager.Instance.Current.Coins = profile.Coins;
-            RefreshProfileHud();
-
-            // Live updates from AimTrain or BluesBar writes
-            _profileSync.CoinsChanged += coins =>
+            void HydrateAndRefresh()
             {
-                Dispatcher.Invoke(() =>
-                {
-                    BluesBar.Systems.ProfileManager.Instance.Current.Coins = coins;
-                    RefreshProfileHud();
-                });
+                var disk = _profileSync.LoadOrCreateLocked();
+                BluesBar.Systems.ProfileManager.Instance.HydrateFromDisk(disk);
+                RefreshProfileHud();
+            }
+
+            // initial
+            HydrateAndRefresh();
+
+            _profileSync.CoinsChanged += _ =>
+            {
+                Dispatcher.Invoke(HydrateAndRefresh);
             };
 
             _profileSync.StartWatching();
         }
 
+
+
+
         protected override void OnClosed(EventArgs e)
         {
             _profileSync?.Dispose();
             base.OnClosed(e);
-        }
-
-        public void AwardCoins(int amount)
-        {
-            if (amount <= 0) return;
-
-            // Writes into BluesBar's profile.json under the shared lock.
-            _profileSync.EarnLocked(amount, reason: "AimTrain");
         }
 
 

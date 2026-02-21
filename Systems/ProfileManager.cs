@@ -7,16 +7,15 @@ namespace BluesBar.Systems
 {
     public sealed class ProfileManager
     {
-        // One manager for the app (easy mode)
         public static ProfileManager Instance { get; } = new ProfileManager();
 
         private readonly Mutex _mutex = new Mutex(false, "Global\\BluesBar_ProfileLock");
-        private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
-        {
-            WriteIndented = true
-        };
+        private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions { WriteIndented = true };
 
-        public Profile Current { get; private set; } = new Profile();
+        // IMPORTANT: shared schema type (the one that goes to disk)
+        public BluesShared.Profile Shared { get; private set; } = new BluesShared.Profile();
+
+        public Profile Current { get; private set; }
 
         public string DataDir { get; }
         public string ProfilePath { get; }
@@ -25,9 +24,9 @@ namespace BluesBar.Systems
         {
             DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BluesBar");
             ProfilePath = Path.Combine(DataDir, "profile.json");
+            Current = new Profile(Shared);
         }
 
-        // ---------- Public lifecycle ----------
         public void LoadOrCreate()
         {
             Directory.CreateDirectory(DataDir);
@@ -37,15 +36,17 @@ namespace BluesBar.Systems
             {
                 if (!File.Exists(ProfilePath))
                 {
-                    Current = new Profile();
-                    SaveInternal(); // create initial file
+                    Shared = new BluesShared.Profile();
+                    Current = new Profile(Shared);
+                    SaveInternal();
                     return;
                 }
 
                 var json = File.ReadAllText(ProfilePath);
-                var loaded = JsonSerializer.Deserialize<Profile>(json, _jsonOptions);
+                var loaded = JsonSerializer.Deserialize<BluesShared.Profile>(json, _jsonOptions);
 
-                Current = loaded ?? new Profile();
+                Shared = loaded ?? new BluesShared.Profile();
+                Current = new Profile(Shared);
             }
             finally
             {
@@ -56,17 +57,10 @@ namespace BluesBar.Systems
         public void Save()
         {
             _mutex.WaitOne();
-            try
-            {
-                SaveInternal();
-            }
-            finally
-            {
-                _mutex.ReleaseMutex();
-            }
+            try { SaveInternal(); }
+            finally { _mutex.ReleaseMutex(); }
         }
 
-        // ---------- Economy operations ----------
         public void Earn(long amount, string reason = "Earn")
         {
             if (amount <= 0) return;
@@ -75,14 +69,11 @@ namespace BluesBar.Systems
             try
             {
                 Current.Coins += amount;
-                Current.LifetimeEarned += amount;          // THIS is your “Net Worth”
+                Current.LifetimeEarned += amount;
                 Current.UpdatedUtc = DateTime.UtcNow;
                 SaveInternal();
             }
-            finally
-            {
-                _mutex.ReleaseMutex();
-            }
+            finally { _mutex.ReleaseMutex(); }
         }
 
         public bool Spend(long amount, string reason = "Spend")
@@ -92,8 +83,7 @@ namespace BluesBar.Systems
             _mutex.WaitOne();
             try
             {
-                if (Current.Coins < amount)
-                    return false;
+                if (Current.Coins < amount) return false;
 
                 Current.Coins -= amount;
                 Current.LifetimeSpent += amount;
@@ -101,10 +91,7 @@ namespace BluesBar.Systems
                 SaveInternal();
                 return true;
             }
-            finally
-            {
-                _mutex.ReleaseMutex();
-            }
+            finally { _mutex.ReleaseMutex(); }
         }
 
         public void Refund(long amount, string reason = "Refund")
@@ -115,17 +102,12 @@ namespace BluesBar.Systems
             try
             {
                 Current.Coins += amount;
-                // Refund does NOT increase LifetimeEarned. (Keeps “Net Worth” honest.)
                 Current.UpdatedUtc = DateTime.UtcNow;
                 SaveInternal();
             }
-            finally
-            {
-                _mutex.ReleaseMutex();
-            }
+            finally { _mutex.ReleaseMutex(); }
         }
 
-        // ---------- Inventory ----------
         public void UnlockCursor(string id)
         {
             if (string.IsNullOrWhiteSpace(id)) return;
@@ -140,6 +122,23 @@ namespace BluesBar.Systems
             finally { _mutex.ReleaseMutex(); }
         }
 
+        public void HydrateFromDisk(BluesShared.Profile disk)
+        {
+            if (disk == null) return;
+
+            _mutex.WaitOne();
+            try
+            {
+                Shared = disk;
+                Current = new Profile(Shared);
+            }
+            finally
+            {
+                _mutex.ReleaseMutex();
+            }
+        }
+
+
         public void EquipCursor(string id)
         {
             if (string.IsNullOrWhiteSpace(id)) return;
@@ -147,7 +146,6 @@ namespace BluesBar.Systems
             _mutex.WaitOne();
             try
             {
-                // Optional rule: must be unlocked (you can relax this later)
                 if (id != "Default" && !Current.UnlockedCursors.Contains(id))
                     return;
 
@@ -158,22 +156,17 @@ namespace BluesBar.Systems
             finally { _mutex.ReleaseMutex(); }
         }
 
-        // ---------- Internal atomic save ----------
         private void SaveInternal()
         {
             Directory.CreateDirectory(DataDir);
-
-            Current.UpdatedUtc = DateTime.UtcNow;
+            Shared.UpdatedUtc = DateTime.UtcNow;
 
             var tmp = ProfilePath + ".tmp";
             var backup = ProfilePath + ".bak";
 
-            var json = JsonSerializer.Serialize(Current, _jsonOptions);
-
-            // Write temp file first
+            var json = JsonSerializer.Serialize(Shared, _jsonOptions);
             File.WriteAllText(tmp, json);
 
-            // Backup existing profile if it exists
             if (File.Exists(ProfilePath))
             {
                 File.Copy(ProfilePath, backup, true);
@@ -186,4 +179,3 @@ namespace BluesBar.Systems
         }
     }
 }
-

@@ -6,8 +6,10 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using BluesBar.Systems;
 
 namespace BluesBar.Gambloo.Scenes
@@ -22,388 +24,595 @@ namespace BluesBar.Gambloo.Scenes
 
         private readonly Random _rng = new();
 
-        // perf + sim tuning
-        private const double PegRadius = 5;
-        private const double BallRadius = 8;
-        private const double Gravity = 2200;   // px/s^2
-        private const double Bounce = 0.88;
-        private const double PegDeflect = 0.92;
-        private const double MaxDt = 0.03;
+        // ----------------------------
+        // Fixed board + buckets
+        // ----------------------------
+        private const int Rows = 16;             // FIXED
+        private const int Buckets = Rows + 1;    // 17 buckets
 
-        // dynamic layout
-        private int _rows = 16;
-        private double _boardW, _boardH;
-        private double _bucketTopY;
+        // Native board size (matches XAML PegLayerImage/BallLayer)
+        private const double W = 780;
+        private const double H = 392;
+
+        // Board geometry
+        private const double BoardTop = 10;
+        private const double BoardLeft = 10;
+        private const double BoardRight = W - 10;
+        private const double BoardBottom = H - 10;
+
+        private const double BucketTopY = H * 0.78;    // “floor” where buckets start
+        private const double BucketBottomY = H - 12;   // where balls settle
+
+        private const double PegRadius = 5.0;  // not tiny anymore
+        private const double BallRadius = 5.0;
+
+        private const double RailThickness = 3.0;
+        private const double RailTopPad = 4.0;
 
         private readonly List<Point> _pegs = new();
-        private double[] _multipliers = Array.Empty<double>();
+        private readonly List<double> _railsX = new();
 
-        // rendering tick
-        private bool _renderHooked;
+        // Single editable static array (clean + obvious)
+        // 17 entries (Buckets = Rows + 1).
+        // Edit this anytime.
+        private static readonly double[] Multipliers =
+        {
+            1000, 200, 10, 6, 3, 1.2, 0.6, 0.2, 0.0, 0.2, 0.6, 1.2, 3, 6, 10, 200, 1000
+        };
+
+        // Physics: BAITED CHAOS
+        private const double Gravity = 980.0;      // faster falls = more peg hits = more chaos
+        private const double PegBounce = 0.62;     // bouncy, but not pinball
+        private const double WallBounce = 0.28;    // edges feel alive when you touch them
+        private const double TangentialKeep = 0.94;// preserves sideways motion (wiggles)
+        private const double XDrag = 0.85;         // less damping => more drift
+        private const double CenterPull = 3.69;    // gentle bias only
+        private const double MaxDt = 1.0 / 30.0;
+
+        // Add this near your other constants:
+        private const double PegJitter = 140.0;    // “bait” wobble (px/s impulse scale)
+
+
+        private double CenterX => (BoardLeft + BoardRight) * 0.5;
+
+        // ----------------------------
+        // Loop + auto
+        // ----------------------------
+        private bool _hooked;
         private DateTime _lastTickUtc;
 
-        // fps counter
+        private readonly DispatcherTimer _autoTimer = new DispatcherTimer();
+
         private int _fpsFrames;
         private double _fpsAccum;
-        private double _fps;
 
         private sealed class Ball
         {
-            public Border Visual = new();
-            public TranslateTransform TT = new();
+            public long Stake;
+            public Ellipse Shape = null!;
+            public TranslateTransform TT = null!;
             public Point P;
             public Vector V;
-            public long Stake;
+
             public bool Landed;
             public DateTime LandedUtc;
-            public int BucketIndex;
             public bool Fading;
+            public int BucketIndex;
         }
 
         private readonly List<Ball> _balls = new();
+
+        // Cache bucket UI cells for highlight
+        private Border[] _bucketCells = Array.Empty<Border>();
 
         public BlinkoScene()
         {
             InitializeComponent();
 
+            // Lock native sizes (so the Viewbox scaling is predictable)
+            if (PegLayerImage != null)
+            {
+                PegLayerImage.Width = W;
+                PegLayerImage.Height = H;
+            }
+            if (BallLayer != null)
+            {
+                BallLayer.Width = W;
+                BallLayer.Height = H;
+            }
+
+            _autoTimer.Interval = TimeSpan.FromMilliseconds(100); // 10/sec
+            _autoTimer.Tick += (_, __) => SpawnBallFromUi();
+
             Loaded += (_, __) =>
             {
                 RefreshWalletHud();
-                BuildAll();
+                BuildBoardVisuals();
+                BuildBucketRow();
                 HookRender();
             };
 
-            Unloaded += (_, __) => UnhookRender();
-
-            if (BoardCanvas != null)
+            Unloaded += (_, __) =>
             {
-                BoardCanvas.SizeChanged += (_, __) =>
-                {
-                    BuildAll();
-                };
-            }
+                _autoTimer.Stop();
+                UnhookRender();
+            };
         }
 
-        public void OnShown()
-        {
-            RefreshWalletHud();
-        }
-
+        public void OnShown() => RefreshWalletHud();
         public void OnHidden() { }
 
-        // ---------------------------
-        // UI helpers
-        // ---------------------------
+        // ---------------- UI ----------------
         private void RefreshWalletHud()
         {
             var p = ProfileManager.Instance.Current;
             if (WalletText != null) WalletText.Text = $"Savings: {p.Coins:N0} Coins";
         }
 
-        private void SetOutcome(string msg, Brush? color = null)
-        {
-            if (OutcomeText == null) return;
-            OutcomeText.Text = msg;
-            OutcomeText.Foreground = color ?? Brushes.White;
-        }
-
-        private void SetBusy(bool busy)
-        {
-            IsBusy = busy;
-            BusyChanged?.Invoke(busy);
-
-            if (DropButton != null) DropButton.IsEnabled = !busy;
-            if (BetTextBox != null) BetTextBox.IsEnabled = !busy;
-            if (RiskCombo != null) RiskCombo.IsEnabled = !busy;
-            if (RowsCombo != null) RowsCombo.IsEnabled = !busy;
-        }
+        private string RiskMode =>
+            (RiskCombo?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Medium";
 
         private bool TryGetBet(out long bet)
         {
             bet = 0;
-            return BetTextBox != null &&
-                   long.TryParse(BetTextBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out bet);
+            if (BetBox == null) return false;
+            return long.TryParse(BetBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out bet);
         }
 
-        private void BetPlus1k_Click(object sender, RoutedEventArgs e) => AddToBet(1_000);
-        private void Half_Click(object sender, RoutedEventArgs e)
+        private void SetLastWin(string msg, Brush? color = null)
         {
+            if (LastWinText == null) return;
+            LastWinText.Text = msg;
+            LastWinText.Foreground = color ?? Brushes.Gold;
+        }
+
+        public void Plus1k_Click(object sender, RoutedEventArgs e) => AddToBet(1_000);
+
+        public void Half_Click(object sender, RoutedEventArgs e)
+        {
+            if (BetBox == null) return;
             if (!TryGetBet(out var b)) b = 0;
             b = Math.Max(1, b / 2);
-            BetTextBox.Text = b.ToString(CultureInfo.InvariantCulture);
+            BetBox.Text = b.ToString(CultureInfo.InvariantCulture);
         }
 
-        private void Double_Click(object sender, RoutedEventArgs e)
+        public void Double_Click(object sender, RoutedEventArgs e)
         {
+            if (BetBox == null) return;
             if (!TryGetBet(out var b)) b = 0;
-            b = Math.Max(1, b * 2);
-            BetTextBox.Text = b.ToString(CultureInfo.InvariantCulture);
+            if (b > long.MaxValue / 2) b = long.MaxValue;
+            else b = Math.Max(1, b * 2);
+            BetBox.Text = b.ToString(CultureInfo.InvariantCulture);
         }
 
         private void AddToBet(long add)
         {
+            if (BetBox == null) return;
             if (!TryGetBet(out var cur)) cur = 0;
-            if (BetTextBox != null) BetTextBox.Text = (cur + add).ToString(CultureInfo.InvariantCulture);
+            if (cur > long.MaxValue - add) cur = long.MaxValue;
+            else cur += add;
+            cur = Math.Max(1, cur);
+            BetBox.Text = cur.ToString(CultureInfo.InvariantCulture);
         }
 
-        private void RowsCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        private void Manual_Checked(object sender, RoutedEventArgs e)
         {
-            _rows = RowsCombo?.SelectedIndex switch
+            if (AutoToggle != null) AutoToggle.IsChecked = false;
+            _autoTimer.Stop();
+        }
+
+        private void Auto_Checked(object sender, RoutedEventArgs e)
+        {
+            if (ManualToggle != null) ManualToggle.IsChecked = false;
+            _autoTimer.Start();
+        }
+
+        private void Auto_Unchecked(object sender, RoutedEventArgs e)
+        {
+            _autoTimer.Stop();
+            if (ManualToggle != null) ManualToggle.IsChecked = true;
+        }
+
+        private void Risk_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            // Risk only changes feel/spread, visuals same
+        }
+
+        private void Drop_Click(object sender, RoutedEventArgs e) => SpawnBallFromUi();
+
+        private void Clear_Click(object sender, RoutedEventArgs e)
+        {
+            if (BallLayer != null)
             {
-                0 => 12,
-                1 => 16,
-                2 => 18,
-                _ => 16
-            };
-            BuildAll();
+                foreach (var b in _balls.ToList())
+                    BallLayer.Children.Remove(b.Shape);
+            }
+            _balls.Clear();
+            SetLastWin("");
+            ClearBucketHighlight();
         }
 
-        // ---------------------------
-        // Build UI / board
-        // ---------------------------
-        private void BuildAll()
+        private void SpawnBallFromUi()
         {
-            if (BoardCanvas == null) return;
+            if (!TryGetBet(out var stake) || stake <= 0)
+            {
+                SetLastWin("Invalid bet.", Brushes.IndianRed);
+                return;
+            }
 
-            _boardW = Math.Max(300, BoardCanvas.ActualWidth);
-            _boardH = Math.Max(300, BoardCanvas.ActualHeight);
-            _bucketTopY = _boardH * 0.84;
+            if (!ProfileManager.Instance.Spend(stake, "Blinko Bet"))
+            {
+                SetLastWin("Not enough coins.", Brushes.IndianRed);
+                RefreshWalletHud();
+                return;
+            }
 
+            RefreshWalletHud();
+            SpawnBall(stake);
+        }
+
+        // ---------------- Board visuals (clean) ----------------
+        private void BuildBoardVisuals()
+        {
             BuildPegs();
-            BuildMultipliers();
-            BuildBucketRow();
-            BuildRightList();
-            RenderPegLayerToBitmap();
+            BuildRails();
+            RenderPegLayer();
         }
 
         private void BuildPegs()
         {
             _pegs.Clear();
 
-            // staggered rows in a pyramid
-            double topPad = 28;
-            double leftPad = 28;
-            double rightPad = 28;
+            // Make it fill width nicely.
+            // Bottom row has 16 pegs => 15 gaps across usable width.
+            double left = BoardLeft + 22;
+            double right = BoardRight - 22;
+            double usableW = right - left;
 
-            int colsAtTop = 3;
-            int colsAtBottom = colsAtTop + (_rows - 1);
+            double top = BoardTop + 18;
+            double bottom = BucketTopY - 22;
+            double usableH = bottom - top;
 
-            double usableW = _boardW - leftPad - rightPad;
-            double gapX = usableW / (colsAtBottom - 1);
-            double gapY = (_bucketTopY - topPad - 24) / (_rows - 1);
+            double rowGap = usableH / (Rows - 1);
+            double colGap = usableW / (Rows - 1);
 
-            for (int r = 0; r < _rows; r++)
+            for (int r = 0; r < Rows; r++)
             {
-                int cols = colsAtTop + r;
-                double rowW = (cols - 1) * gapX;
-                double startX = (_boardW - rowW) * 0.5;
-                double y = topPad + r * gapY;
+                int cols = r + 1;
+                double y = top + r * rowGap;
+
+                double rowW = (cols - 1) * colGap;
+                double startX = CenterX - rowW * 0.5;
 
                 for (int c = 0; c < cols; c++)
                 {
-                    double x = startX + c * gapX;
+                    double x = startX + c * colGap;
                     _pegs.Add(new Point(x, y));
                 }
             }
         }
 
-        private void BuildMultipliers()
+        private void BuildRails()
         {
-            // buckets = bottom row pegs + 1
-            // bottom row columns = colsAtTop + (rows - 1)
-            int bottomCols = 3 + (_rows - 1);
-            int buckets = bottomCols + 1;
+            _railsX.Clear();
+            double bucketW = (BoardRight - BoardLeft) / Buckets;
 
-            // Risk profile: wider tails + higher center for High risk
-            string risk = (RiskCombo?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Medium";
-
-            // start with symmetric "bell-ish" curve (lossy edges, spicy center)
-            // then inject a hard center 1000x bucket.
-            var baseArr = new double[buckets];
-            int mid = buckets / 2;
-
-            for (int i = 0; i < buckets; i++)
+            for (int i = 1; i < Buckets; i++)
             {
-                int d = Math.Abs(i - mid);
-
-                // baseline curve
-                double v = risk switch
-                {
-                    "Low" => Math.Max(0.5, 1.8 - d * 0.12),
-                    "High" => Math.Max(0.2, 2.2 - d * 0.18),
-                    _ => Math.Max(0.35, 2.0 - d * 0.15),
-                };
-
-                // edges should punish
-                if (d > mid * 0.75) v *= 0.35;
-                if (d > mid * 0.60) v *= 0.60;
-
-                baseArr[i] = Math.Round(v, 2);
-            }
-
-            // Make center insane
-            baseArr[mid] = 1000.0;
-
-            // Make near-center juicy but not silly
-            if (mid - 1 >= 0) baseArr[mid - 1] = risk == "High" ? 24.0 : 12.0;
-            if (mid + 1 < buckets) baseArr[mid + 1] = risk == "High" ? 24.0 : 12.0;
-
-            if (mid - 2 >= 0) baseArr[mid - 2] = risk == "High" ? 8.0 : 4.0;
-            if (mid + 2 < buckets) baseArr[mid + 2] = risk == "High" ? 8.0 : 4.0;
-
-            // Keep symmetric (we already are), store
-            _multipliers = baseArr;
-        }
-
-        private void BuildBucketRow()
-        {
-            if (BucketGrid == null) return;
-            BucketGrid.Columns = Math.Max(5, _multipliers.Length);
-            BucketGrid.Children.Clear();
-
-            for (int i = 0; i < _multipliers.Length; i++)
-            {
-                double m = _multipliers[i];
-
-                Brush border = new SolidColorBrush(Color.FromRgb(0x22, 0x32, 0x4A));
-                Brush bg = new SolidColorBrush(Color.FromRgb(0x0B, 0x12, 0x20));
-                Brush fg = Brushes.White;
-
-                if (m >= 1000) { border = new SolidColorBrush(Color.FromRgb(0x6F, 0xC3, 0xE2)); fg = Brushes.LightGreen; }
-                else if (m >= 10) { border = new SolidColorBrush(Color.FromRgb(0x6F, 0xC3, 0xE2)); fg = Brushes.LightGreen; }
-                else if (m < 1) { fg = Brushes.IndianRed; }
-
-                var tile = new Border
-                {
-                    CornerRadius = new CornerRadius(10),
-                    BorderBrush = border,
-                    BorderThickness = new Thickness(2),
-                    Background = bg,
-                    Margin = new Thickness(4, 0, 4, 0),
-                    Padding = new Thickness(6, 6, 6, 6),
-                    Child = new TextBlock
-                    {
-                        Text = m >= 1000 ? "1000x" : $"x{m:0.##}",
-                        Foreground = fg,
-                        FontFamily = new FontFamily("Consolas"),
-                        FontSize = 12,
-                        FontWeight = FontWeights.Bold,
-                        HorizontalAlignment = HorizontalAlignment.Center,
-                        VerticalAlignment = VerticalAlignment.Center
-                    }
-                };
-
-                BucketGrid.Children.Add(tile);
+                _railsX.Add(BoardLeft + i * bucketW);
             }
         }
 
-        private void BuildRightList()
-        {
-            if (RightMultiplierStack == null) return;
-            RightMultiplierStack.Children.Clear();
-
-            for (int i = 0; i < _multipliers.Length; i++)
-            {
-                double m = _multipliers[i];
-                var pill = new Border
-                {
-                    CornerRadius = new CornerRadius(999),
-                    BorderThickness = new Thickness(2),
-                    BorderBrush = m >= 10 ? new SolidColorBrush(Color.FromRgb(0x6F, 0xC3, 0xE2)) : new SolidColorBrush(Color.FromRgb(0x22, 0x32, 0x4A)),
-                    Background = new SolidColorBrush(Color.FromRgb(0x0B, 0x12, 0x20)),
-                    Padding = new Thickness(8, 6, 8, 6),
-                    Margin = new Thickness(0, 0, 0, 8),
-                    Child = new TextBlock
-                    {
-                        Text = m >= 1000 ? "1000x" : $"x{m:0.##}",
-                        Foreground = (m < 1) ? Brushes.IndianRed : (m >= 10 ? Brushes.LightGreen : Brushes.White),
-                        FontFamily = new FontFamily("Consolas"),
-                        FontSize = 12,
-                        FontWeight = FontWeights.Bold,
-                        HorizontalAlignment = HorizontalAlignment.Center
-                    }
-                };
-                RightMultiplierStack.Children.Add(pill);
-            }
-        }
-
-        private void RenderPegLayerToBitmap()
+        private void RenderPegLayer()
         {
             if (PegLayerImage == null) return;
 
-            int w = Math.Max(1, (int)Math.Round(_boardW));
-            int h = Math.Max(1, (int)Math.Round(_bucketTopY));
+            int w = (int)W;
+            int h = (int)H;
 
             var dv = new DrawingVisual();
             using (var dc = dv.RenderOpen())
             {
-                // border frame
+                // Frame
                 var stroke = new Pen(new SolidColorBrush(Color.FromRgb(0x22, 0x32, 0x4A)), 2);
-                dc.DrawRectangle(null, stroke, new Rect(0, 0, _boardW, _bucketTopY));
+                stroke.Freeze();
 
-                // pegs
+                dc.DrawRoundedRectangle(
+                    new SolidColorBrush(Color.FromRgb(0x0B, 0x0F, 0x16)),
+                    stroke,
+                    new Rect(BoardLeft, BoardTop, BoardRight - BoardLeft, BoardBottom - BoardTop),
+                    14, 14);
+
+                // Pegs
                 var pegBrush = new SolidColorBrush(Color.FromRgb(0xE5, 0xE7, 0xEB));
                 pegBrush.Freeze();
+
                 foreach (var p in _pegs)
                     dc.DrawEllipse(pegBrush, null, p, PegRadius, PegRadius);
 
-                // bucket separators
-                int buckets = _multipliers.Length;
-                double bucketW = _boardW / buckets;
-                var sepPen = new Pen(new SolidColorBrush(Color.FromRgb(0x22, 0x32, 0x4A)), 2) { DashStyle = DashStyles.Solid };
-                sepPen.Freeze();
+                // Bucket floor line
+                var railPen = new Pen(new SolidColorBrush(Color.FromRgb(0x22, 0x32, 0x4A)), RailThickness);
+                railPen.Freeze();
 
-                for (int i = 1; i < buckets; i++)
-                {
-                    double x = i * bucketW;
-                    dc.DrawLine(sepPen, new Point(x, _bucketTopY), new Point(x, _boardH));
-                }
+                dc.DrawLine(railPen, new Point(BoardLeft, BucketTopY), new Point(BoardRight, BucketTopY));
 
-                // floor
-                dc.DrawLine(stroke, new Point(0, _bucketTopY), new Point(_boardW, _bucketTopY));
+                // Bucket walls (bins)
+                double railTop = BucketTopY + RailTopPad;
+                double railBottom = BoardBottom;
+
+                // left boundary
+                dc.DrawLine(railPen, new Point(BoardLeft, railTop), new Point(BoardLeft, railBottom));
+                // rails
+                foreach (double x in _railsX)
+                    dc.DrawLine(railPen, new Point(x, railTop), new Point(x, railBottom));
+                // right boundary
+                dc.DrawLine(railPen, new Point(BoardRight, railTop), new Point(BoardRight, railBottom));
             }
 
             var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
             rtb.Render(dv);
             PegLayerImage.Source = rtb;
-
-            // size peg image to match canvas
-            PegLayerImage.Width = _boardW;
-            PegLayerImage.Height = _bucketTopY;
-            Canvas.SetLeft(PegLayerImage, 0);
-            Canvas.SetTop(PegLayerImage, 0);
         }
 
-        // ---------------------------
-        // Rendering loop (smooth)
-        // ---------------------------
+        private void BuildBucketRow()
+        {
+            if (BucketGrid == null) return;
+
+            BucketGrid.Rows = 1;
+            BucketGrid.Columns = Buckets;
+            BucketGrid.Children.Clear();
+
+            _bucketCells = new Border[Buckets];
+
+            for (int i = 0; i < Buckets; i++)
+            {
+                double m = Multipliers[i];
+
+                Brush fg =
+                    m >= 1000 ? Brushes.LightGreen :
+                    m >= 10 ? new SolidColorBrush(Color.FromRgb(0x6F, 0xC3, 0xE2)) :
+                    m <= 0 ? Brushes.IndianRed :
+                    Brushes.White;
+
+                var txt = new TextBlock
+                {
+                    Text = m >= 1000 ? "1000x" : $"{m:0.##}x",
+                    Foreground = fg,
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize = 10,
+                    FontWeight = FontWeights.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Opacity = 0.95
+                };
+
+                var cell = new Border
+                {
+                    CornerRadius = new CornerRadius(6),
+                    BorderThickness = new Thickness(1),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(0x22, 0x32, 0x4A)),
+                    Background = Brushes.Transparent,
+                    Margin = new Thickness(2, 0, 2, 0),
+                    Child = txt
+                };
+
+                _bucketCells[i] = cell;
+                BucketGrid.Children.Add(cell);
+            }
+        }
+
+        private void HighlightBucket(int idx, bool jackpot)
+        {
+            if (_bucketCells == null || _bucketCells.Length == 0) return;
+            idx = Math.Clamp(idx, 0, _bucketCells.Length - 1);
+
+            ClearBucketHighlight();
+
+            var cell = _bucketCells[idx];
+            cell.Background = jackpot
+                ? new SolidColorBrush(Color.FromArgb(120, 120, 255, 210))
+                : new SolidColorBrush(Color.FromArgb(80, 111, 195, 226));
+
+            // fade back out
+            var a = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(750))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+
+            a.Completed += (_, __) =>
+            {
+                cell.Background = Brushes.Transparent;
+                cell.Opacity = 1;
+            };
+
+            cell.BeginAnimation(OpacityProperty, a);
+        }
+
+        private void ClearBucketHighlight()
+        {
+            if (_bucketCells == null) return;
+            foreach (var c in _bucketCells)
+            {
+                if (c == null) continue;
+                c.BeginAnimation(OpacityProperty, null);
+                c.Opacity = 1;
+                c.Background = Brushes.Transparent;
+            }
+        }
+
+        // ---------------- Balls ----------------
+        private void SpawnBall(long stake)
+        {
+            if (BallLayer == null) return;
+
+            // Risk affects spread + initial vx, but physics keeps central
+            double spread = RiskMode switch
+            {
+                "Low" => 14,
+                "High" => 30,
+                _ => 20
+            };
+
+            double x = CenterX + (_rng.NextDouble() * spread - spread * 0.5);
+            double y = BoardTop + 18;
+
+            var glow = new DropShadowEffect
+            {
+                Color = Colors.White,
+                BlurRadius = 14,
+                ShadowDepth = 0,
+                Opacity = 0.90
+            };
+
+            var orb = new Ellipse
+            {
+                Width = BallRadius * 2,
+                Height = BallRadius * 2,
+                Fill = new SolidColorBrush(Color.FromRgb(110, 200, 255)),
+                Effect = glow,
+                Opacity = 0.98
+            };
+
+            var tt = new TranslateTransform(x - BallRadius, y - BallRadius);
+            orb.RenderTransform = tt;
+
+            BallLayer.Children.Add(orb);
+
+            double vx = (_rng.NextDouble() * 160 - 80) * (RiskMode == "High" ? 1.0 : 0.65);
+
+            _balls.Add(new Ball
+            {
+                Stake = stake,
+                Shape = orb,
+                TT = tt,
+                P = new Point(x, y),
+                V = new Vector(vx, 0),
+                Landed = false
+            });
+        }
+
+        private void ResolveLanding(Ball b)
+        {
+            double bucketW = (BoardRight - BoardLeft) / Buckets;
+
+            int idx = (int)Math.Floor((b.P.X - BoardLeft) / bucketW);
+            idx = Math.Clamp(idx, 0, Buckets - 1);
+            b.BucketIndex = idx;
+
+            double mult = Multipliers[idx];
+            long payout = (long)Math.Round(b.Stake * mult);
+
+            if (payout > 0)
+                ProfileManager.Instance.Earn(payout, "Blinko Payout");
+
+            RefreshWalletHud();
+
+            long profit = payout - b.Stake;
+
+            SetLastWin(
+                profit >= 0 ? $"+{profit:N0}  ({mult:0.##}x)" : $"{profit:N0}  ({mult:0.##}x)",
+                profit >= 0 ? Brushes.LightGreen : Brushes.IndianRed
+            );
+
+            bool jackpot = mult >= 1000;
+            HighlightBucket(idx, jackpot);
+
+            b.Landed = true;
+            b.LandedUtc = DateTime.UtcNow;
+
+            if (jackpot)
+            {
+                b.Shape.Fill = new SolidColorBrush(Color.FromRgb(160, 255, 210));
+                JackpotFx();
+            }
+            else if (mult <= 0.0)
+            {
+                b.Shape.Fill = new SolidColorBrush(Color.FromRgb(255, 140, 140));
+            }
+        }
+
+        private void FadeAndRemove(Ball b)
+        {
+            if (b.Fading) return;
+            b.Fading = true;
+
+            var a = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(420))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+            };
+
+            a.Completed += (_, __) =>
+            {
+                if (BallLayer != null)
+                    BallLayer.Children.Remove(b.Shape);
+
+                _balls.Remove(b);
+            };
+
+            b.Shape.BeginAnimation(OpacityProperty, a);
+        }
+
+        private void JackpotFx()
+        {
+            if (BallLayer == null) return;
+
+            var txt = new TextBlock
+            {
+                Text = "JACKPOT!",
+                Foreground = Brushes.White,
+                FontFamily = new FontFamily("Segoe UI Black"),
+                FontSize = 34,
+                Effect = new DropShadowEffect { Color = Colors.White, BlurRadius = 25, ShadowDepth = 0, Opacity = 0.95 }
+            };
+
+            var s = new ScaleTransform(1, 1);
+            txt.RenderTransform = s;
+            txt.RenderTransformOrigin = new Point(0.5, 0.5);
+
+            Canvas.SetLeft(txt, CenterX - 92);
+            Canvas.SetTop(txt, BoardTop + 18);
+
+            BallLayer.Children.Add(txt);
+
+            var pop = new DoubleAnimation(1.0, 1.25, TimeSpan.FromMilliseconds(180))
+            {
+                AutoReverse = true,
+                EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.6 }
+            };
+            s.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
+            s.BeginAnimation(ScaleTransform.ScaleYProperty, pop);
+
+            var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(700))
+            {
+                BeginTime = TimeSpan.FromMilliseconds(420),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+            };
+            fade.Completed += (_, __) => BallLayer.Children.Remove(txt);
+            txt.BeginAnimation(OpacityProperty, fade);
+        }
+
+        // ---------------- Render loop ----------------
         private void HookRender()
         {
-            if (_renderHooked) return;
-            _renderHooked = true;
+            if (_hooked) return;
+            _hooked = true;
             _lastTickUtc = DateTime.UtcNow;
             CompositionTarget.Rendering += OnRender;
         }
 
         private void UnhookRender()
         {
-            if (!_renderHooked) return;
-            _renderHooked = false;
+            if (!_hooked) return;
+            _hooked = false;
             CompositionTarget.Rendering -= OnRender;
         }
 
         private void OnRender(object? sender, EventArgs e)
         {
-            if (_balls.Count == 0)
-            {
-                // still update fps display slowly
-                UpdateFps(0.016);
-                return;
-            }
-
             var now = DateTime.UtcNow;
             double dt = (now - _lastTickUtc).TotalSeconds;
             _lastTickUtc = now;
+
             dt = Math.Clamp(dt, 0.001, MaxDt);
 
             Step(dt);
@@ -414,235 +623,123 @@ namespace BluesBar.Gambloo.Scenes
         {
             _fpsFrames++;
             _fpsAccum += dt;
-
             if (_fpsAccum >= 0.5)
             {
-                _fps = _fpsFrames / _fpsAccum;
+                double fps = _fpsFrames / _fpsAccum;
                 _fpsFrames = 0;
                 _fpsAccum = 0;
 
-                if (FpsText != null)
-                    FpsText.Text = $"FPS: {_fps:0}";
+                if (FpsText != null) FpsText.Text = $"FPS: {fps:0}";
             }
-        }
-
-        // ---------------------------
-        // Gameplay
-        // ---------------------------
-        private void Drop_Click(object sender, RoutedEventArgs e)
-        {
-            if (IsBusy) return;
-
-            if (!TryGetBet(out var stake) || stake <= 0)
-            {
-                SetOutcome("Invalid bet.", Brushes.IndianRed);
-                return;
-            }
-
-            if (!ProfileManager.Instance.Spend(stake, "Blinko Stake"))
-            {
-                SetOutcome("Not enough coins.", Brushes.IndianRed);
-                RefreshWalletHud();
-                return;
-            }
-
-            RefreshWalletHud();
-            SpawnBall(stake);
-
-            SetOutcome($"Dropped {stake:N0}.", Brushes.White);
-        }
-
-        private void SpawnBall(long stake)
-        {
-            if (BallLayer == null) return;
-
-            double x = _boardW * 0.5 + (_rng.NextDouble() * 20 - 10);
-            double y = 18;
-
-            // ball visual = Border + text, moved with TranslateTransform (no layout)
-            var ballBorder = new Border
-            {
-                Width = BallRadius * 2,
-                Height = BallRadius * 2,
-                CornerRadius = new CornerRadius(999),
-                Background = new SolidColorBrush(Color.FromRgb(0xE5, 0xE7, 0xEB)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x6F, 0xC3, 0xE2)),
-                BorderThickness = new Thickness(2),
-                Opacity = 0.98,
-                RenderTransform = new TranslateTransform(x - BallRadius, y - BallRadius),
-                Child = new TextBlock
-                {
-                    Text = "•",
-                    Foreground = new SolidColorBrush(Color.FromRgb(0x0B, 0x12, 0x20)),
-                    FontFamily = new FontFamily("Consolas"),
-                    FontSize = 14,
-                    FontWeight = FontWeights.Bold,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                }
-            };
-
-            BallLayer.Children.Add(ballBorder);
-
-            var tt = (TranslateTransform)ballBorder.RenderTransform;
-
-            var b = new Ball
-            {
-                Stake = stake,
-                Visual = ballBorder,
-                TT = tt,
-                P = new Point(x, y),
-                V = new Vector(_rng.NextDouble() * 120 - 60, 0),
-                Landed = false
-            };
-
-            _balls.Add(b);
         }
 
         private void Step(double dt)
         {
+            if (_balls.Count == 0) return;
+
+            double cx = CenterX;
+            double leftWall = BoardLeft + BallRadius + 2;
+            double rightWall = BoardRight - BallRadius - 2;
+
             for (int i = _balls.Count - 1; i >= 0; i--)
             {
                 var b = _balls[i];
 
                 if (b.Landed)
                 {
-                    // clear after couple seconds
-                    var alive = (DateTime.UtcNow - b.LandedUtc).TotalSeconds;
-                    if (!b.Fading && alive >= 1.6)
-                    {
-                        b.Fading = true;
+                    if (!b.Fading && (DateTime.UtcNow - b.LandedUtc).TotalSeconds >= 2.0)
                         FadeAndRemove(b);
-                    }
                     continue;
                 }
 
                 // gravity
                 b.V = new Vector(b.V.X, b.V.Y + Gravity * dt);
 
+                // horizontal damping
+                double damp = Math.Exp(-XDrag * dt);
+                b.V = new Vector(b.V.X * damp, b.V.Y);
+
+                // gentle inward pull
+                double dxToCenter = (cx - b.P.X);
+                b.V = new Vector(b.V.X + (dxToCenter * CenterPull) * dt, b.V.Y);
+
                 // integrate
                 b.P = new Point(b.P.X + b.V.X * dt, b.P.Y + b.V.Y * dt);
 
                 // walls
-                if (b.P.X - BallRadius < 0)
+                if (b.P.X < leftWall)
                 {
-                    b.P = new Point(BallRadius, b.P.Y);
-                    b.V = new Vector(-b.V.X * Bounce, b.V.Y);
+                    b.P = new Point(leftWall, b.P.Y);
+                    b.V = new Vector(Math.Abs(b.V.X) * WallBounce + 100, b.V.Y);
                 }
-                if (b.P.X + BallRadius > _boardW)
+                else if (b.P.X > rightWall)
                 {
-                    b.P = new Point(_boardW - BallRadius, b.P.Y);
-                    b.V = new Vector(-b.V.X * Bounce, b.V.Y);
+                    b.P = new Point(rightWall, b.P.Y);
+                    b.V = new Vector(-Math.Abs(b.V.X) * WallBounce - 100, b.V.Y);
                 }
 
-                // peg collisions (simple circle collision)
-                for (int p = 0; p < _pegs.Count; p++)
+                // rails below bucket entrance: keep ball inside its slot visually
+                if (b.P.Y >= BucketTopY + RailTopPad)
                 {
-                    var peg = _pegs[p];
-                    double dx = b.P.X - peg.X;
-                    double dy = b.P.Y - peg.Y;
-                    double dist2 = dx * dx + dy * dy;
-
-                    double minDist = BallRadius + PegRadius;
-                    if (dist2 < minDist * minDist)
+                    foreach (double rx in _railsX)
                     {
-                        double dist = Math.Max(0.001, Math.Sqrt(dist2));
-                        double nx = dx / dist;
-                        double ny = dy / dist;
+                        double dx = b.P.X - rx;
+                        double minDx = (RailThickness * 0.5) + BallRadius;
+
+                        if (Math.Abs(dx) < minDx)
+                        {
+                            double sign = dx >= 0 ? 1 : -1;
+                            b.P = new Point(rx + sign * minDx, b.P.Y);
+                            b.V = new Vector(-b.V.X * 0.35, b.V.Y);
+                        }
+                    }
+                }
+
+                // peg collisions ONLY above bucket entrance
+                if (b.P.Y < BucketTopY)
+                {
+                    for (int p = 0; p < _pegs.Count; p++)
+                    {
+                        var peg = _pegs[p];
+                        double dx = b.P.X - peg.X;
+                        double dy = b.P.Y - peg.Y;
+                        double jitter = (_rng.NextDouble() * 2.0 - 1.0) * PegJitter;
+
+                        double minD = BallRadius + PegRadius;
+                        double d2 = dx * dx + dy * dy;
+                        if (d2 >= minD * minD) continue;
+
+                        double d = Math.Max(0.001, Math.Sqrt(d2));
+                        double nx = dx / d;
+                        double ny = dy / d;
 
                         // push out
-                        b.P = new Point(peg.X + nx * minDist, peg.Y + ny * minDist);
+                        b.P = new Point(peg.X + nx * minD, peg.Y + ny * minD);
 
-                        // decompose velocity
+                        // reflect about normal, keep tangential
                         double vn = b.V.X * nx + b.V.Y * ny;
                         var vN = new Vector(nx * vn, ny * vn);
                         var vT = b.V - vN;
 
-                        // reflect normal, keep tangential
-                        b.V = (vT * PegDeflect) - (vN * Bounce);
-
-                        // tiny chaos
-                        b.V = new Vector(b.V.X + (_rng.NextDouble() * 30 - 15), b.V.Y);
+                        b.V = (vT * TangentialKeep) - (vN * PegBounce);
+                        b.V = new Vector(b.V.X + jitter, Math.Max(140, b.V.Y));
                     }
                 }
 
-                // landing
-                if (b.P.Y + BallRadius >= _bucketTopY)
+                // bucket settling: drop into the bins, resolve at bottom
+                if (b.P.Y + BallRadius >= BucketBottomY)
                 {
-                    b.P = new Point(b.P.X, _bucketTopY - BallRadius);
-                    b.Landed = true;
-                    b.LandedUtc = DateTime.UtcNow;
-
+                    b.P = new Point(b.P.X, BucketBottomY - BallRadius);
                     ResolveLanding(b);
                 }
 
-                // update transform (no layout)
+                // apply transform
                 b.TT.X = b.P.X - BallRadius;
                 b.TT.Y = b.P.Y - BallRadius;
             }
         }
-
-        private void ResolveLanding(Ball b)
-        {
-            int buckets = _multipliers.Length;
-            double bucketW = _boardW / buckets;
-
-            int idx = (int)Math.Floor(b.P.X / bucketW);
-            idx = Math.Clamp(idx, 0, buckets - 1);
-            b.BucketIndex = idx;
-
-            double mult = _multipliers[idx];
-            long payout = (long)Math.Round(b.Stake * mult);
-
-            if (payout > 0)
-                ProfileManager.Instance.Earn(payout, "Blinko Payout");
-
-            RefreshWalletHud();
-
-            long profit = payout - b.Stake;
-
-            if (BoardHintText != null)
-                BoardHintText.Text = $"Bucket {idx + 1}/{buckets}  x{mult:0.##}";
-
-            if (mult >= 1000)
-            {
-                // make the ball “legendary”
-                b.Visual.BorderBrush = new SolidColorBrush(Color.FromRgb(0x6F, 0xC3, 0xE2));
-                b.Visual.BorderThickness = new Thickness(3);
-            }
-            else if (mult >= 10)
-            {
-                b.Visual.BorderBrush = new SolidColorBrush(Color.FromRgb(0x6F, 0xC3, 0xE2));
-            }
-            else if (mult < 1)
-            {
-                b.Visual.BorderBrush = new SolidColorBrush(Color.FromRgb(0xB9, 0x1C, 0x1C));
-            }
-
-            SetOutcome(
-                profit >= 0
-                    ? $"+{profit:N0} profit (Paid {payout:N0})"
-                    : $"{profit:N0} loss (Paid {payout:N0})",
-                profit >= 0 ? Brushes.LightGreen : Brushes.IndianRed
-            );
-        }
-
-        private void FadeAndRemove(Ball b)
-        {
-            var a = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(450))
-            {
-                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
-            };
-
-            a.Completed += (_, __) =>
-            {
-                if (BallLayer != null)
-                    BallLayer.Children.Remove(b.Visual);
-
-                _balls.Remove(b);
-            };
-
-            b.Visual.BeginAnimation(OpacityProperty, a);
-        }
     }
 }
+
+
+

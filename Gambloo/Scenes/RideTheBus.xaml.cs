@@ -40,6 +40,8 @@ namespace BluesBar.Gambloo.Scenes
         // multipliers after clearing N steps (cashout after 1+)
         private static readonly double[] StepMultipliers = { 2, 3, 5, 100};
 
+        private readonly bool[] _revealed = new bool[5]; // 1..4 used
+
         public RideTheBusScene()
         {
             InitializeComponent();
@@ -269,10 +271,18 @@ namespace BluesBar.Gambloo.Scenes
 
         private void RevealCard(int index)
         {
-            if (index == 1) AnimateFlip(CardBorderFor(Card1Text), () => SetCardFace(Card1Text, _c1));
-            else if (index == 2) AnimateFlip(CardBorderFor(Card2Text), () => SetCardFace(Card2Text, _c2));
-            else if (index == 3) AnimateFlip(CardBorderFor(Card3Text), () => SetCardFace(Card3Text, _c3));
-            else if (index == 4) AnimateFlip(CardBorderFor(Card4Text), () => SetCardFace(Card4Text, _c4));
+            if (index < 1 || index > 4) return;
+            if (_revealed[index]) return;
+            _revealed[index] = true;
+
+            if (index == 1)
+                AnimateFlip(CardBorderFor(Card1Text), () => SetCardFace(Card1Text, _c1));
+            else if (index == 2)
+                AnimateFlip(CardBorderFor(Card2Text), () => SetCardFace(Card2Text, _c2));
+            else if (index == 3)
+                AnimateFlip(CardBorderFor(Card3Text), () => SetCardFace(Card3Text, _c3));
+            else if (index == 4)
+                AnimateFlip(CardBorderFor(Card4Text), () => SetCardFace(Card4Text, _c4));
         }
 
         // -------------------------
@@ -283,6 +293,8 @@ namespace BluesBar.Gambloo.Scenes
             _inRun = false;
             _stageCleared = 0;
             _stake = 0;
+
+            Array.Clear(_revealed, 0, _revealed.Length);
 
             SetCardEmpty(Card1Text);
             SetCardEmpty(Card2Text);
@@ -399,6 +411,8 @@ namespace BluesBar.Gambloo.Scenes
         private void StartRound_Click(object sender, RoutedEventArgs e)
         {
             if (IsBusy) return;
+
+            Array.Clear(_revealed, 0, _revealed.Length);
 
             if (!TryGetStake(out var stake) || stake <= 0)
             {

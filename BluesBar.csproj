@@ -9,7 +9,32 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="Assets\aim.png" />
+    <None Remove="Assets\backpack.png" />
+    <None Remove="Assets\gambloo.png" />
+    <None Remove="Assets\store.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Folder Include="Packages\BluesAimTrain\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\aim.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Assets\backpack.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Assets\gambloo.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Assets\MainMenu.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Assets\store.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
   </ItemGroup>
 
 </Project>

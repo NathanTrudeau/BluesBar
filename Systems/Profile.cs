@@ -1,35 +1,115 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using BluesShared;
+using System;
+using System.Windows.Media;
 
 namespace BluesBar.Systems
 {
-    public class Profile
+    // UI wrapper around the shared persisted data.
+    // DO NOT serialize this type to profile.json.
+    public sealed class Profile
     {
-        // Identity (optional for now)
-        public string PlayerName { get; set; } = "b1uepack";
+        public BluesShared.Profile Data { get; }
 
-        // Wallet
-        public long Coins { get; set; } = 0;                 // spendable balance ("savings")
-        public long LifetimeEarned { get; set; } = 0;         // total earned EVER (monotonic) = "Net Worth"
-        public long LifetimeSpent { get; set; } = 0;          // total spent EVER (for stats)
+        public Profile(BluesShared.Profile data)
+        {
+            Data = data ?? throw new ArgumentNullException(nameof(data));
+        }
 
-        // Cosmetic inventory
-        public HashSet<string> UnlockedCursors { get; set; } = new();
-        public HashSet<string> UnlockedBackgrounds { get; set; } = new();
-        public HashSet<string> UnlockedSfx { get; set; } = new();
+        // --- Identity ---
+        public string PlayerName
+        {
+            get => Data.PlayerName;
+            set => Data.PlayerName = value;
+        }
 
-        // Equipped cosmetics
-        public string EquippedCursor { get; set; } = "Default";
-        public string EquippedBackground { get; set; } = "Default";
-        public string EquippedSfx { get; set; } = "Default";
+        public string PlayerNameColorHex
+        {
+            get => Data.PlayerNameColorHex;
+            set => Data.PlayerNameColorHex = value;
+        }
 
-        // Convenience: your “phony” net worth flex number
-        public long NetWorth => LifetimeEarned;
+        // --- Wallet ---
+        public long Coins
+        {
+            get => Data.Coins;
+            set => Data.Coins = value;
+        }
 
-        // Metadata (nice for debugging)
-        public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
-        public DateTime UpdatedUtc { get; set; } = DateTime.UtcNow;
-        public int SchemaVersion { get; set; } = 1;
+        public long LifetimeEarned
+        {
+            get => Data.LifetimeEarned;
+            set => Data.LifetimeEarned = value;
+        }
+
+        public long LifetimeSpent
+        {
+            get => Data.LifetimeSpent;
+            set => Data.LifetimeSpent = value;
+        }
+
+        public long NetWorth => Data.LifetimeEarned;
+
+        // --- Cosmetics ---
+        public System.Collections.Generic.HashSet<string> UnlockedCursors
+        {
+            get => Data.UnlockedCursors;
+            set => Data.UnlockedCursors = value;
+        }
+
+        public System.Collections.Generic.HashSet<string> UnlockedBackgrounds
+        {
+            get => Data.UnlockedBackgrounds;
+            set => Data.UnlockedBackgrounds = value;
+        }
+
+        public System.Collections.Generic.HashSet<string> UnlockedSfx
+        {
+            get => Data.UnlockedSfx;
+            set => Data.UnlockedSfx = value;
+        }
+
+        public string EquippedCursor
+        {
+            get => Data.EquippedCursor;
+            set => Data.EquippedCursor = value;
+        }
+
+        public string EquippedBackground
+        {
+            get => Data.EquippedBackground;
+            set => Data.EquippedBackground = value;
+        }
+
+        public string EquippedSfx
+        {
+            get => Data.EquippedSfx;
+            set => Data.EquippedSfx = value;
+        }
+
+        // --- AimTrainer XP source ---
+        public long LifetimeAimCoinsEarned
+        {
+            get => Data.LifetimeAimCoinsEarned;
+            set => Data.LifetimeAimCoinsEarned = value;
+        }
+
+        // --- Metadata ---
+        public DateTime CreatedUtc
+        {
+            get => Data.CreatedUtc;
+            set => Data.CreatedUtc = value;
+        }
+
+        public DateTime UpdatedUtc
+        {
+            get => Data.UpdatedUtc;
+            set => Data.UpdatedUtc = value;
+        }
+
+        public int SchemaVersion
+        {
+            get => Data.SchemaVersion;
+            set => Data.SchemaVersion = value;
+        }
     }
 }
-
