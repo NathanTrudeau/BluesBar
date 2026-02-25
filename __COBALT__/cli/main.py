@@ -5,7 +5,14 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ..core import run_init, run_scan, run_report, run_pr_review
+from ..core import (
+    run_init,
+    run_scan,
+    run_report,
+    run_pr_review,
+    run_qa,
+    run_triage,
+)
 
 
 COMMANDS = {
@@ -13,6 +20,8 @@ COMMANDS = {
     "scan": run_scan,
     "report": run_report,
     "pr-review": run_pr_review,
+    "qa-run": run_qa,
+    "triage": run_triage,
 }
 
 

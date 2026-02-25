@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import textwrap
 from pathlib import Path
 from typing import List, Optional
@@ -12,6 +13,7 @@ from .report import ReportWriter
 from .runlog import RunLog
 from .scanner import RepoScanner
 from .pr_review import PRReview
+from .qa import QAExecutor, TriageReporter
 from .utils import COBALT_DIR, REPO_ROOT
 
 
@@ -70,6 +72,25 @@ def run_pr_review(args: List[str]) -> None:
     scan_dir = _ensure_scanresults_dir()
     writer = ReportWriter(config=config, runlog=runlog, scan_dir=scan_dir)
     writer.write_runlog(scan_dir / "RUNLOG_pr_review.txt")
+
+
+def run_qa(args: Optional[List[str]] = None) -> None:
+    loader = ConfigLoader()
+    config = loader.load_all()
+    runlog = RunLog()
+    executor = QAExecutor(config=config, runlog=runlog)
+    result = executor.execute()
+    scan_dir = _ensure_scanresults_dir()
+    writer = ReportWriter(config=config, runlog=runlog, scan_dir=scan_dir)
+    writer.write_runlog(scan_dir / "RUNLOG_qa.txt")
+    print("QA run complete:")
+    print(json.dumps(result, indent=2))
+
+
+def run_triage(args: Optional[List[str]] = None) -> None:
+    reporter = TriageReporter()
+    summary = reporter.triage_last()
+    print(json.dumps(summary, indent=2))
 
 
 def format_cli_summary(title: str, lines: List[str]) -> str:

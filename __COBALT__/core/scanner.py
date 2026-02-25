@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from .config import CobaltConfig
 from .runlog import RunLog
 from .utils import REPO_ROOT, glob_match, list_repo_files, run_command
+from .build_detect import discover_commands
 
 
 class RepoScanner:
@@ -58,31 +59,7 @@ class RepoScanner:
         }
 
     def _detect_build_commands(self) -> List[Dict[str, str]]:
-        commands: List[Dict[str, str]] = []
-        if (REPO_ROOT / "package.json").exists():
-            commands.append({
-                "command": "npm run build",
-                "confidence": "MEDIUM",
-                "reason": "package.json detected",
-            })
-            commands.append({
-                "command": "npm test",
-                "confidence": "MEDIUM",
-                "reason": "package.json detected",
-            })
-        if (REPO_ROOT / "requirements.txt").exists():
-            commands.append({
-                "command": "pytest",
-                "confidence": "LOW",
-                "reason": "requirements.txt detected",
-            })
-        if not commands:
-            commands.append({
-                "command": "(none detected)",
-                "confidence": "LOW",
-                "reason": "No known build files",
-            })
-        return commands
+        return discover_commands()
 
     def _policy_findings(self) -> Dict[str, Any]:
         policies = self.config.policies
