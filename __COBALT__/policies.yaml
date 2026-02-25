@@ -1,0 +1,107 @@
+version: 1
+
+# Safety posture:
+# - COBALT may ALWAYS write inside __COBALT__/ (scan outputs, reports, patches, runlogs).
+# - COBALT must treat all repo files outside __COBALT__/ as READ-ONLY during Phase 1 and Phase 2.
+# - Phase 3+ allows creating patches inside __COBALT__/_patches and applying them only via explicit operator command.
+
+write_controls:
+  write_allowed_env: "COBALT_WRITE_ALLOWED"
+  # If true, COBALT may modify repo files outside __COBALT__ (Phase 3+ only).
+  allow_repo_writes: false
+  # If true, COBALT may apply patches into a branch when operator explicitly requests it.
+  allow_patch_apply: false
+  # COBALT is always allowed to write within these paths:
+  always_allowed_write_paths:
+    - "__COBALT__/**"
+
+# High-signal "sensitive zones" that should never be modified unless explicitly allowed.
+scopes:
+  denylist:
+    # UI/Assets default lock
+    - "**/*.xaml"
+    - "**/*.png"
+    - "**/*.jpg"
+    - "**/*.jpeg"
+    - "**/*.svg"
+    - "**/*.ico"
+    - "**/*.webp"
+    - "**/UI/**"
+    - "**/Views/**"
+    - "**/Resources/**"
+    # CI/pipeline configs default lock (can be relaxed later)
+    - "**/.github/**"
+    - "**/Jenkinsfile"
+    - "**/azure-pipelines.yml"
+    - "**/.gitlab-ci.yml"
+    # Secrets and creds
+    - "**/*.pfx"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/*.crt"
+    - "**/*secret*"
+    - "**/*credential*"
+    - "**/*token*"
+
+  # Files COBALT may propose changes to, but must ask for confirmation first.
+  confirm_first:
+    - "**/*auth*"
+    - "**/*payment*"
+    - "**/*billing*"
+    - "**/*crypto*"
+    - "**/*encrypt*"
+    - "**/*migration*"
+    - "**/*schema*"
+    - "**/*database*"
+    - "**/*net*"
+    - "**/*socket*"
+    - "**/*http*"
+
+  # Where COBALT can freely create its own artifacts.
+  cobalt_internal:
+    - "__COBALT__/**"
+
+# Budgets apply to changes outside __COBALT__ (when allow_repo_writes becomes true).
+change_budget:
+  max_files_changed: 25
+  max_loc_changed: 800
+  max_dirs_touched: 8
+
+dependencies:
+  allow_new_dependencies: true
+  require_approval_for_dependency_change: true
+  allow_dependency_updates: true
+
+requirements:
+  require_tests_for_code_changes: true
+  require_auditor_for_patches: true
+  require_evidence_for_claims: true
+  deterministic_outputs: true
+
+scan:
+  # COBALT should discover build/test commands by looking at common files, but never execute destructive scripts.
+  allow_running_build: true
+  allow_running_tests: true
+  # Avoid running "clean all" or destructive scripts unless operator asks.
+  forbid_patterns:
+    - "rm -rf"
+    - "del /s"
+    - "format"
+    - "diskpart"
+    - "shutdown"
+    - "reboot"
+
+watch:
+  enabled_by_default: false
+  default_branches:
+    - "main"
+    - "master"
+  include_branches_glob:
+    - "feature/*"
+    - "release/*"
+  nightly_hour_local: 19
+
+reporting:
+  include_confidence: true
+  confidence_scale: "LOW|MEDIUM|HIGH"
+  max_findings_in_summary: 12

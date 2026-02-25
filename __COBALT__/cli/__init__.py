@@ -1,0 +1,1 @@
+"""COBALT CLI package."""
