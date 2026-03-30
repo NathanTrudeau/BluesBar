@@ -46,7 +46,7 @@ namespace BluesBar.Systems
                 var json = File.ReadAllText(ProfilePath);
                 var loaded = JsonSerializer.Deserialize<Profile>(json, _jsonOptions);
 
-                Shared = loaded ?? new Profile();
+                Shared = loaded ?? new BluesShared.Profile();
 
                 if (ProfileFixups.ApplyLegacyAimXpMigration(Shared))
                 {
