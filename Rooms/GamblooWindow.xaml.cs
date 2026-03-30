@@ -21,6 +21,7 @@ namespace BluesBar.Rooms
             _host.Register(new RocketCrashScene());
             _host.Register(new BlinkoScene());
             _host.Register(new CoinFlipScene());
+            _host.Register(new ChickenRunScene());
             _host.Register(new RockPaperScissorsScene());
 
             // Start on Blackjack
@@ -70,6 +71,7 @@ namespace BluesBar.Rooms
         private void NavRocketCrash_Click(object sender, RoutedEventArgs e) => SetScene("rocketcrash");
         private void NavBlinko_Click(object sender, RoutedEventArgs e) => SetScene("blinko");
         private void NavCoinFlip_Click(object sender, RoutedEventArgs e) => SetScene("coinflip");
+        private void NavChickenRun_Click(object sender, RoutedEventArgs e) => SetScene("chickenrun");
         private void NavRockPaperScissors_Click(object sender, RoutedEventArgs e) => SetScene("rockpaperscissors");
 
 

@@ -43,6 +43,7 @@
                 <Button Content="RocketCrash" Margin="0,0,8,0" Click="NavRocketCrash_Click"/>
                 <Button Content="Blinko" Margin="0,0,8,0" Click="NavBlinko_Click"/>
                 <Button Content="CoinFlip" Margin="0,0,8,0" Click="NavCoinFlip_Click"/>
+                <Button Content="ChickenRun" Margin="0,0,8,0" Click="NavChickenRun_Click"/>
                 <Button Content="RPS" Margin="0,0,8,0" Click="NavRockPaperScissors_Click"/>
             </StackPanel>
 
