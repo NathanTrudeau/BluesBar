@@ -44,7 +44,7 @@ namespace BluesBar.Systems
                 }
 
                 var json = File.ReadAllText(ProfilePath);
-                var loaded = JsonSerializer.Deserialize<Profile>(json, _jsonOptions);
+                var loaded = JsonSerializer.Deserialize<BluesShared.Profile>(json, _jsonOptions);
 
                 Shared = loaded ?? new BluesShared.Profile();
 
