@@ -95,7 +95,14 @@ namespace BluesShared
                 {
                     var json = File.ReadAllText(ProfilePath);
                     var loaded = JsonSerializer.Deserialize<Profile>(json, _jsonOptions);
-                    return loaded ?? new Profile();
+                    var profile = loaded ?? new Profile();
+
+                    if (ProfileFixups.ApplyLegacyAimXpMigration(profile))
+                    {
+                        SaveInternalLocked_NoLock(profile);
+                    }
+
+                    return profile;
                 }
                 catch
                 {
@@ -288,7 +295,14 @@ namespace BluesShared
             try
             {
                 var json = File.ReadAllText(ProfilePath);
-                return JsonSerializer.Deserialize<Profile>(json, _jsonOptions) ?? new Profile();
+                var profile = JsonSerializer.Deserialize<Profile>(json, _jsonOptions) ?? new Profile();
+
+                if (ProfileFixups.ApplyLegacyAimXpMigration(profile))
+                {
+                    SaveInternalLocked_NoLock(profile);
+                }
+
+                return profile;
             }
             catch
             {
